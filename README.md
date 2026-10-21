@@ -2,7 +2,7 @@
 
 ![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
 ![Licença MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green)
-![Status M0](https://img.shields.io/badge/status-M0%20somente%20leitura-blue)
+![Status M1.1](https://img.shields.io/badge/status-M1.1%20planejamento-blue)
 
 Inventário e diagnóstico de instalações PHP em distribuições Linux, com uma interface de
 terminal no estilo lazydocker.
@@ -11,8 +11,9 @@ O phpman responde, em um só lugar, perguntas que costumam exigir meia dúzia de
 qual PHP está realmente ativo, qual socket o FPM usa, por que um site quebrou depois de
 uma atualização e por que o `php -v` do terminal não é o mesmo PHP que o nginx executa.
 
-> **Status: M0 — somente leitura.** O phpman detecta o ambiente e aponta problemas, mas
-> ainda não instala, remove ou troca versões. Nada é alterado e nenhum acesso root é
+> **Status: M0 + M1.1 — somente leitura.** O phpman detecta o ambiente, aponta problemas e
+> gera planos de instalação, remoção e troca com `--dry-run`. A execução real, o helper
+> privilegiado e o rollback chegam no M1.2/M1.3. Nada é alterado e nenhum acesso root é
 > solicitado nesta versão. O plano completo está em [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Sumário
@@ -21,6 +22,7 @@ uma atualização e por que o `php -v` do terminal não é o mesmo PHP que o ngi
 - [Recursos](#recursos)
 - [Instalação](#instalação)
 - [Uso](#uso)
+- [Planejamento seguro](#planejamento-seguro)
 - [Interface](#interface)
 - [Saída JSON](#saída-json)
 - [Como a detecção funciona](#como-a-detecção-funciona)
@@ -65,6 +67,13 @@ confirmação, privilégio mínimo e rollback.
 - Emite avisos acionáveis com códigos estáveis (`fpm-inactive`, `socket-missing`,
   `vhost-socket-missing`, `path-mismatch`, `no-php`...).
 
+**Planejamento**
+
+- Gera planos de instalação, remoção e troca para Debian/Ubuntu, sem executar nada.
+- Mostra os `argv` exatos, os verificadores e o rollback previsto.
+- Exporta o plano em JSON (`schema: 1`) para revisão e testes de contrato.
+- Bloqueia a remoção da versão ativa e avisa sobre vhosts afetados.
+
 **Interface**
 
 - TUI com abas *Visão geral*, *Versões* e *Doutor*, responsiva a terminais estreitos.
@@ -96,10 +105,61 @@ go install github.com/lucasarakaki/phpman/cmd/phpman@latest
 | `phpman status` | relatório completo do ambiente |
 | `phpman status --json` | inventário completo em JSON |
 | `phpman doctor` | apenas diagnósticos e sugestões |
+| `phpman install 8.3 --dry-run` | simula a instalação de uma versão |
+| `phpman remove 8.2 --dry-run` | simula a remoção de uma versão |
+| `phpman switch 8.3 --dry-run` | simula a troca da versão ativa |
 | `phpman version` | mostra a versão |
 | `phpman help` | mostra a ajuda |
 
 Sem TTY (por exemplo em um pipe), `phpman` sem argumentos imprime o relatório em texto.
+
+## Planejamento seguro
+
+O M1.1 não executa nenhuma alteração. Os comandos de escrita exigem `--dry-run` e
+produzem um plano revisável com os comandos exatos, os verificadores e o rollback:
+
+```bash
+phpman install 8.3 --dry-run
+phpman remove 8.2 --dry-run
+phpman switch 8.3 --dry-run
+```
+
+Exemplo de saída:
+
+```
+phpman plano · simulação, nada será alterado
+Instalar PHP 8.3 (CLI, FPM e OPcache)
+ação install · versão 8.3 · requer root: sim
+
+PASSOS
+  1. Instalar php8.3-cli, php8.3-common, php8.3-fpm, php8.3-opcache
+     apt-get install -y --no-install-recommends php8.3-cli php8.3-common php8.3-fpm php8.3-opcache
+  2. Habilitar e iniciar o FPM
+     systemctl enable --now php8.3-fpm.service
+  3. Confirmar que o binário responde com a versão esperada
+     verificação: binary-version /usr/bin/php8.3 8.3
+
+ROLLBACK
+  1. Parar e desabilitar o FPM instalado
+     systemctl disable --now php8.3-fpm.service
+  2. Remover os pacotes instalados pelo plano
+     apt-get purge -y php8.3-cli php8.3-common php8.3-fpm php8.3-opcache
+```
+
+Para inspecionar o plano em scripts:
+
+```bash
+phpman install 8.3 --dry-run --json | jq '.steps[].argv'
+```
+
+As regras atuais:
+
+- `--dry-run` é obrigatório; sem ele, o comando explica que a execução chega no M1.2.
+- O plano nunca usa shell: cada passo é uma lista de argumentos.
+- Remover a versão ativa é bloqueado; troque de versão primeiro.
+- A remoção avisa quais vhosts usam o socket da versão.
+- Repositórios de terceiros são apenas sinalizados nesta etapa; a inclusão de sury/ondrej
+  com confirmação explícita entra numa fatia seguinte.
 
 ## Interface
 
@@ -203,21 +263,22 @@ funciona sem root.
 
 ## Compatibilidade
 
-| Família | Detecção | Catálogo de versões | Escrita |
-|---|---|---|---|
-| Debian/Ubuntu e derivados | completa | sim (apt) | planejada (M1) |
-| Fedora | genérica | — | planejada (M2) |
-| RHEL/Rocky/Alma | genérica | — | planejada (M2) |
-| Arch/Manjaro | genérica | — | somente leitura (versão única) |
-| Alpine | genérica | — | planejada (M3) |
-| openSUSE/SLES | genérica | — | planejada (M3) |
+| Família | Detecção | Catálogo de versões | Planejamento | Escrita |
+|---|---|---|---|---|
+| Debian/Ubuntu e derivados | completa | sim (apt) | sim (apt) | M1.2 |
+| Fedora | genérica | — | — | M2 |
+| RHEL/Rocky/Alma | genérica | — | — | M2 |
+| Arch/Manjaro | genérica | — | — | somente leitura (versão única) |
+| Alpine | genérica | — | — | M3 |
+| openSUSE/SLES | genérica | — | — | M3 |
 
 "Genérica" significa que binários, SAPIs, serviços, sockets e vhosts são detectados; o
-catálogo de pacotes depende do provider da família.
+catálogo de pacotes e o planejamento dependem do provider da família.
 
 ## Segurança
 
-- M0 não executa nenhum comando de escrita e não pede sudo.
+- M0 e M1.1 não executam nenhum comando de escrita e não pedem sudo.
+- Planos são dados puros: não contêm funções, timestamps ou efeitos colaterais.
 - Nenhum comando é montado por concatenação de string: apenas `argv`.
 - Timeout e cancelamento em toda execução externa.
 - Nenhuma senha é lida, gravada ou registrada.
@@ -226,12 +287,15 @@ catálogo de pacotes depende do provider da família.
 ## Arquitetura
 
 ```
-cmd/phpman/        entrada, subcomandos e flags
-internal/core/     modelo de domínio (Version, SAPI, Snapshot, Warning...)
-internal/detect/   os-release, binários PHP, systemd, sockets, vhosts, apt, dpkg/rpm
-internal/report/   renderização em texto, doctor e JSON
-internal/tui/      interface bubbletea/lipgloss
-docs/              roadmap, decisões e critérios de aceite
+cmd/phpman/           entrada, subcomandos e flags
+internal/core/        modelo de domínio (Snapshot, Version, Plan, Step...)
+internal/detect/      os-release, binários PHP, systemd, sockets, vhosts, apt, dpkg/rpm
+internal/provider/    contrato de planejamento e erros
+internal/provider/apt planos apt de instalar, remover e trocar
+internal/provider/registry  seleção do provider pela família
+internal/report/      renderização em texto, doctor, planos e JSON
+internal/tui/         interface bubbletea/lipgloss
+docs/                 roadmap, decisões e critérios de aceite
 ```
 
 Fluxo de dados:
@@ -240,12 +304,13 @@ Fluxo de dados:
 os-release ──┐
 binários ────┤
 systemd ─────┼──> detect.Scan ──> core.Snapshot ──┬──> report (texto/JSON)
-pools ───────┤                                    └──> tui (bubbletea)
-vhosts ──────┤
+pools ───────┤                                    ├──> tui (bubbletea)
+vhosts ──────┤                                    └──> provider/apt ──> core.Plan
 apt/dpkg ────┘
 ```
 
-O núcleo não conhece a UI. O mesmo `Snapshot` alimenta a TUI, o `status` e o JSON.
+O núcleo não conhece a UI. O mesmo `Snapshot` alimenta a TUI, o `status` e os planos. O
+provider apenas lê o snapshot e devolve dados; execução e privilégio ficam para o M1.2.
 
 ## Desenvolvimento
 
@@ -258,15 +323,22 @@ make run       # executa o TUI
 
 Os parsers de os-release, `php -v`, `php --ini`, `php -m`, pools FPM, alternatives,
 `apt-cache policy` e configurações de nginx/Apache têm testes unitários com fixtures.
-Testes de integração em containers (Debian, Ubuntu, Fedora, Alpine) entram no M1, junto
-com as primeiras ações de escrita.
+Os planos do provider apt também são testados como dados: `argv` exato, bloqueios,
+rollback, determinismo e ausência de shell/metacaracteres.
+
+O smoke test atual roda o binário em `debian:12` e gera um plano real de instalação sem
+root. A matriz completa de containers (Debian/Ubuntu, com systemd) entra no M1.5.
 
 ## Roadmap
 
 | Marco | Escopo |
 |---|---|
-| **M0** (atual) | detecção, TUI somente leitura, `status --json`, `doctor` |
-| M1 | instalar/remover/trocar no Debian/Ubuntu, plano + sudo + rollback |
+| **M0** (concluído) | detecção, TUI somente leitura, `status --json`, `doctor` |
+| **M1.1** (atual) | planos apt de instalar/remover/trocar, `--dry-run` e JSON |
+| M1.2 | executor, helper sudo, allowlist e journal |
+| M1.3 | health check, rollback e sury/ondrej opt-in |
+| M1.4 | ações na TUI |
+| M1.5 | containers Debian/Ubuntu e release |
 | M2 | extensões por versão e suporte a Fedora/RHEL via Remi |
 | M3 | Alpine/openSUSE, integração transacional com nginx/Apache |
 | M4 | pacotes `.deb`/`.rpm`/`.apk`, i18n, CI completo |
@@ -279,7 +351,17 @@ Detalhes, critérios de aceite e o protocolo do helper privilegiado estão em
 - Rode `make check` antes de abrir um pull request.
 - Use commits convencionais (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `ci:`).
 - Parsers novos precisam de teste com fixture; nada de depender da máquina local.
-- Detecção deve continuar funcionando sem root e sem efeitos colaterais.
+- Detecção e planejamento devem continuar funcionando sem root e sem efeitos colaterais.
+
+### Fluxo de branches
+
+- `main` contém apenas versões estáveis.
+- `develop` é a branch de integração.
+- Toda feature nasce de `develop` em uma branch própria:
+  `feat/<escopo>`, `fix/<escopo>`, `docs/<escopo>` ou `chore/<escopo>`.
+- O pull request tem `develop` como destino; não faça commit direto em `main` ou
+  `develop`.
+- Releases são cortadas a partir de `main`, com tag e release no GitHub.
 
 ## Licença
 

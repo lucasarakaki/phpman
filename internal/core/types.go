@@ -147,11 +147,18 @@ type AvailableVersion struct {
 
 // Alternative is one update-alternatives (or equivalent) entry.
 type Alternative struct {
-	Name    string `json:"name"`
-	Link    string `json:"link,omitempty"`
-	Current string `json:"current,omitempty"`
-	Best    string `json:"best,omitempty"`
-	Status  string `json:"status,omitempty"`
+	Name       string                 `json:"name"`
+	Link       string                 `json:"link,omitempty"`
+	Current    string                 `json:"current,omitempty"`
+	Best       string                 `json:"best,omitempty"`
+	Status     string                 `json:"status,omitempty"`
+	Candidates []AlternativeCandidate `json:"candidates,omitempty"`
+}
+
+// AlternativeCandidate is one path registered for an alternative.
+type AlternativeCandidate struct {
+	Path     string `json:"path"`
+	Priority int    `json:"priority,omitempty"`
 }
 
 // Severity classifies a diagnostic finding.
