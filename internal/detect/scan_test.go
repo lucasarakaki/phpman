@@ -18,6 +18,8 @@ Value: /usr/bin/php8.2
 
 Alternative: /usr/bin/php8.2
 Priority: 82
+Alternative: /usr/bin/php8.3
+Priority: 83
 `
 	alt, ok := ParseAlternativesQuery(out)
 	if !ok {
@@ -28,6 +30,15 @@ Priority: 82
 	}
 	if alt.Current != "/usr/bin/php8.2" || alt.Best != "/usr/bin/php8.3" || alt.Status != "auto" {
 		t.Errorf("alt = %+v", alt)
+	}
+	if len(alt.Candidates) != 2 {
+		t.Fatalf("candidatos = %+v", alt.Candidates)
+	}
+	if alt.Candidates[0].Path != "/usr/bin/php8.2" || alt.Candidates[0].Priority != 82 {
+		t.Errorf("candidato 0 = %+v", alt.Candidates[0])
+	}
+	if alt.Candidates[1].Path != "/usr/bin/php8.3" || alt.Candidates[1].Priority != 83 {
+		t.Errorf("candidato 1 = %+v", alt.Candidates[1])
 	}
 }
 

@@ -38,6 +38,7 @@ func DetectAlternatives(ctx context.Context) ([]core.Alternative, []string) {
 func ParseAlternativesQuery(out string) (core.Alternative, bool) {
 	var alt core.Alternative
 	found := false
+	candidate := -1
 	for _, line := range strings.Split(out, "\n") {
 		key, value, ok := strings.Cut(line, ":")
 		if !ok {
@@ -54,6 +55,14 @@ func ParseAlternativesQuery(out string) (core.Alternative, bool) {
 			alt.Best = value
 		case "Status":
 			alt.Status = value
+		case "Alternative":
+			alt.Candidates = append(alt.Candidates, core.AlternativeCandidate{Path: value})
+			candidate = len(alt.Candidates) - 1
+		case "Priority":
+			if candidate >= 0 {
+				priority, _ := strconv.Atoi(value)
+				alt.Candidates[candidate].Priority = priority
+			}
 		}
 	}
 	if alt.Name == "" && alt.Link != "" {
