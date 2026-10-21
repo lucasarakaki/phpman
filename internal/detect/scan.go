@@ -395,6 +395,7 @@ func Capabilities(d core.Distro, catalogAvailable bool) []core.Capability {
 	caps := []core.Capability{
 		{Key: "detect", Label: "Detectar instalações, SAPIs, serviços, sockets e sites", Supported: true, Detail: "somente leitura, sem root", Phase: "M0"},
 		{Key: "doctor", Label: "Diagnóstico do ambiente PHP", Supported: true, Detail: "avisos acionáveis", Phase: "M0"},
+		{Key: "plan", Label: "Simular instalação, remoção e troca", Supported: apt, Detail: "planos --dry-run, sem root", Phase: "M1"},
 		{Key: "catalog", Label: "Catálogo de versões disponíveis", Supported: catalog, Detail: "consulta apt-cache", Phase: "M0"},
 		{Key: "install", Label: "Instalar versões", Supported: false, Detail: "planejado", Phase: "M1"},
 		{Key: "remove", Label: "Remover versões", Supported: false, Detail: "planejado", Phase: "M1"},
@@ -403,10 +404,16 @@ func Capabilities(d core.Distro, catalogAvailable bool) []core.Capability {
 		{Key: "third-party", Label: "Adicionar repositórios de terceiros", Supported: false, Detail: "sury/ondrej com confirmação explícita", Phase: "M1"},
 		{Key: "project-pin", Label: "Fixar versão por projeto", Supported: false, Detail: "fora do MVP", Phase: "—"},
 	}
-	if !apt {
-		caps[2].Detail = "família " + string(d.Family) + " ainda sem catálogo"
-	} else if !catalog {
-		caps[2].Detail = "apt-cache não encontrado"
+	for i := range caps {
+		if caps[i].Key != "catalog" {
+			continue
+		}
+		if !apt {
+			caps[i].Detail = "família " + string(d.Family) + " ainda sem catálogo"
+		} else if !catalog {
+			caps[i].Detail = "apt-cache não encontrado"
+		}
+		break
 	}
 	return caps
 }
