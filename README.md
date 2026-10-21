@@ -2,7 +2,7 @@
 
 ![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
 ![Licença MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green)
-![Status M1.1](https://img.shields.io/badge/status-M1.1%20planejamento-blue)
+![Status M1.2](https://img.shields.io/badge/status-M1.2%20execu%C3%A7%C3%A3o-blue)
 
 Inventário e diagnóstico de instalações PHP em distribuições Linux, com uma interface de
 terminal no estilo lazydocker.
@@ -11,10 +11,11 @@ O phpman responde, em um só lugar, perguntas que costumam exigir meia dúzia de
 qual PHP está realmente ativo, qual socket o FPM usa, por que um site quebrou depois de
 uma atualização e por que o `php -v` do terminal não é o mesmo PHP que o nginx executa.
 
-> **Status: M0 + M1.1 — somente leitura.** O phpman detecta o ambiente, aponta problemas e
-> gera planos de instalação, remoção e troca com `--dry-run`. A execução real, o helper
-> privilegiado e o rollback chegam no M1.2/M1.3. Nada é alterado e nenhum acesso root é
-> solicitado nesta versão. O plano completo está em [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: M1.2 — execução com confirmação.** O phpman detecta o ambiente, aponta
+> problemas, gera planos e aplica `install`, `remove` e `switch` em Debian/Ubuntu por um
+> helper privilegiado efêmero, com allowlist, verificação passo a passo e journal. A
+> detecção e o `--dry-run` continuam sem root. O rollback automático e as ações na TUI
+> chegam no M1.3/M1.4. O plano completo está em [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Sumário
 
@@ -42,8 +43,8 @@ site aponta para um socket que não existe mais, se a extensão está instalada 
 desabilitada, e como desfazer uma mudança sem deixar o servidor em um estado ambíguo.
 
 O phpman trata o ambiente PHP como um inventário: primeiro **observa** tudo, depois
-**diagnostica**, e só então — nos próximos marcos — **planeja e executa** mudanças com
-confirmação, privilégio mínimo e rollback.
+**diagnostica**, e só então **planeja e executa** mudanças com confirmação, privilégio
+mínimo e rollback planejado.
 
 ## Recursos
 
@@ -67,11 +68,16 @@ confirmação, privilégio mínimo e rollback.
 - Emite avisos acionáveis com códigos estáveis (`fpm-inactive`, `socket-missing`,
   `vhost-socket-missing`, `path-mismatch`, `no-php`...).
 
-**Planejamento**
+**Planejamento e execução**
 
-- Gera planos de instalação, remoção e troca para Debian/Ubuntu, sem executar nada.
+- Gera planos de instalação, remoção e troca para Debian/Ubuntu.
 - Mostra os `argv` exatos, os verificadores e o rollback previsto.
 - Exporta o plano em JSON (`schema: 1`) para revisão e testes de contrato.
+- Executa com confirmação (`--yes` para automação) por um helper sudo efêmero.
+- Valida cada passo contra o plano em memória e contra uma allowlist: `apt-get`,
+  `systemctl` de unidades PHP-FPM e `update-alternatives` do PHP.
+- Verifica o estado depois de cada passo e para no primeiro erro.
+- Registra comandos, códigos de saída e erros em `/var/lib/phpman/journal.jsonl`.
 - Bloqueia a remoção da versão ativa e avisa sobre vhosts afetados.
 
 **Interface**
@@ -88,10 +94,16 @@ Requisitos para compilar: **Go 1.24+** e Linux.
 git clone https://github.com/lucasarakaki/phpman.git
 cd phpman
 make build
-sudo install -m 0755 bin/phpman /usr/local/bin/phpman
+sudo make install
 ```
 
-Alternativa sem clonar o repositório:
+O `make install` copia o binário para `/usr/local/bin/phpman`. O caminho precisa ser
+root-owned e não gravável por outros usuários: é esse executável que o sudo inicia como
+helper. Rodar `./bin/phpman` ou um binário em `$HOME/go/bin` continua servindo para
+`status`, `doctor` e `--dry-run`, mas a execução de planos é recusada por segurança.
+
+Alternativa sem clonar o repositório (somente leitura/dry-run, a menos que o binário seja
+instalado depois em um diretório root-owned):
 
 ```bash
 go install github.com/lucasarakaki/phpman/cmd/phpman@latest
@@ -105,18 +117,22 @@ go install github.com/lucasarakaki/phpman/cmd/phpman@latest
 | `phpman status` | relatório completo do ambiente |
 | `phpman status --json` | inventário completo em JSON |
 | `phpman doctor` | apenas diagnósticos e sugestões |
+| `phpman install 8.3` | instala uma versão, com confirmação e sudo |
+| `phpman remove 8.2` | remove uma versão, com confirmação e sudo |
+| `phpman switch 8.3` | troca a versão ativa, com confirmação e sudo |
 | `phpman install 8.3 --dry-run` | simula a instalação de uma versão |
 | `phpman remove 8.2 --dry-run` | simula a remoção de uma versão |
 | `phpman switch 8.3 --dry-run` | simula a troca da versão ativa |
+| `phpman install 8.3 --yes` | executa sem pedir confirmação (automação) |
 | `phpman version` | mostra a versão |
 | `phpman help` | mostra a ajuda |
 
 Sem TTY (por exemplo em um pipe), `phpman` sem argumentos imprime o relatório em texto.
 
-## Planejamento seguro
+## Planejamento e execução
 
-O M1.1 não executa nenhuma alteração. Os comandos de escrita exigem `--dry-run` e
-produzem um plano revisável com os comandos exatos, os verificadores e o rollback:
+Todo comando de escrita primeiro produz um plano revisável com os comandos exatos, os
+verificadores e o rollback. `--dry-run` para nesse ponto, sem sudo:
 
 ```bash
 phpman install 8.3 --dry-run
@@ -146,6 +162,26 @@ ROLLBACK
      apt-get purge -y php8.3-cli php8.3-common php8.3-fpm php8.3-opcache
 ```
 
+Sem `--dry-run`, o mesmo plano é exibido e o phpman pede confirmação antes de iniciar o
+helper sudo:
+
+```bash
+phpman install 8.3        # pergunta "Executar este plano? [s/N]"
+phpman remove 8.2 --yes   # automação: não pergunta
+phpman switch 8.3 -y      # alias curto
+```
+
+O fluxo de execução:
+
+1. O plano é validado e enviado ao helper por JSON Lines em um socket Unix privado.
+2. O helper confere schema, ação, versão, ordem, IDs e `argv` exato de cada passo.
+3. A allowlist aceita apenas `apt-get install/purge` de pacotes PHP versionados,
+   `systemctl enable/disable/start/stop/restart` de unidades `php*-fpm.service` e
+   `update-alternatives --set` de `php`, `phpize`, `php-config`, `phpdbg` e `phar`.
+4. Cada comando roda sem shell, com ambiente não interativo e timeout.
+5. O executor verifica o estado depois do passo; no primeiro erro obrigatório ele para.
+6. O helper grava início e fim de cada comando em `/var/lib/phpman/journal.jsonl`.
+
 Para inspecionar o plano em scripts:
 
 ```bash
@@ -154,10 +190,13 @@ phpman install 8.3 --dry-run --json | jq '.steps[].argv'
 
 As regras atuais:
 
-- `--dry-run` é obrigatório; sem ele, o comando explica que a execução chega no M1.2.
+- `--json` exige `--dry-run`; a saída JSON nunca executa.
+- Sem TTY, a execução exige `--yes`; não há confirmação implícita em pipes.
 - O plano nunca usa shell: cada passo é uma lista de argumentos.
 - Remover a versão ativa é bloqueado; troque de versão primeiro.
 - A remoção avisa quais vhosts usam o socket da versão.
+- O rollback é planejado e exibido, mas sua execução automática entra no M1.3.
+- `switch` só altera `update-alternatives`; reiniciar FPM e reescrever vhosts entra no M1.3.
 - Repositórios de terceiros são apenas sinalizados nesta etapa; a inclusão de sury/ondrej
   com confirmação explícita entra numa fatia seguinte.
 
@@ -196,6 +235,8 @@ Teclas:
 | `r` | redetectar o ambiente |
 | `?` | abrir a ajuda |
 | `q` / `ctrl+c` | sair |
+
+A TUI continua somente leitura no M1.2; as ações de escrita pela interface entram no M1.4.
 
 ## Saída JSON
 
@@ -265,7 +306,7 @@ funciona sem root.
 
 | Família | Detecção | Catálogo de versões | Planejamento | Escrita |
 |---|---|---|---|---|
-| Debian/Ubuntu e derivados | completa | sim (apt) | sim (apt) | M1.2 |
+| Debian/Ubuntu e derivados | completa | sim (apt) | sim (apt) | sim (apt) |
 | Fedora | genérica | — | — | M2 |
 | RHEL/Rocky/Alma | genérica | — | — | M2 |
 | Arch/Manjaro | genérica | — | — | somente leitura (versão única) |
@@ -277,19 +318,27 @@ catálogo de pacotes e o planejamento dependem do provider da família.
 
 ## Segurança
 
-- M0 e M1.1 não executam nenhum comando de escrita e não pedem sudo.
-- Planos são dados puros: não contêm funções, timestamps ou efeitos colaterais.
-- Nenhum comando é montado por concatenação de string: apenas `argv`.
+- Detecção, `status`, `doctor` e `--dry-run` rodam sem root; a TUI recusa ser iniciada como
+  root.
+- Toda escrita exige plano, confirmação (ou `--yes`) e um helper sudo efêmero.
+- O helper valida o plano em memória, a ordem dos passos e o `argv` exato antes de executar.
+- O protocolo usa um socket Unix 0600 em diretório 0700 do usuário; o cliente confere que
+  o peer é root e o helper confere que o peer é o usuário que invocou o sudo.
+- A allowlist restringe binários, pacotes, unidades systemd e alternatives do PHP.
+- Nenhum comando é montado por concatenação de string e nenhum shell (`sh`/`bash`) é aceito.
+- O binário que o sudo executa precisa ser root-owned e não gravável por outros usuários.
+- O sudo lê a senha diretamente do terminal; o phpman nunca vê, grava ou registra a senha.
 - Timeout e cancelamento em toda execução externa.
-- Nenhuma senha é lida, gravada ou registrada.
+- O journal é escrito somente pelo helper, em `/var/lib/phpman/journal.jsonl`.
 - `NO_COLOR=1` desativa cores na saída de texto.
 
 ## Arquitetura
 
 ```
-cmd/phpman/           entrada, subcomandos e flags
+cmd/phpman/           entrada, subcomandos, flags e o entrypoint __helper
 internal/core/        modelo de domínio (Snapshot, Version, Plan, Step...)
 internal/detect/      os-release, binários PHP, systemd, sockets, vhosts, apt, dpkg/rpm
+internal/executor/    executor, protocolo JSON Lines, allowlist, journal e verificadores
 internal/provider/    contrato de planejamento e erros
 internal/provider/apt planos apt de instalar, remover e trocar
 internal/provider/registry  seleção do provider pela família
@@ -306,11 +355,16 @@ binários ────┤
 systemd ─────┼──> detect.Scan ──> core.Snapshot ──┬──> report (texto/JSON)
 pools ───────┤                                    ├──> tui (bubbletea)
 vhosts ──────┤                                    └──> provider/apt ──> core.Plan
-apt/dpkg ────┘
+apt/dpkg ────┘                                                              │
+                                                                            ▼
+                              executor ──sudo──> phpman __helper ──> allowlist
+                                  │                    │
+                                  └── verificadores    └── journal
 ```
 
 O núcleo não conhece a UI. O mesmo `Snapshot` alimenta a TUI, o `status` e os planos. O
-provider apenas lê o snapshot e devolve dados; execução e privilégio ficam para o M1.2.
+provider só lê o snapshot e devolve dados; o executor aplica o plano e o helper concentra o
+privilégio e a allowlist.
 
 ## Desenvolvimento
 
@@ -324,19 +378,23 @@ make run       # executa o TUI
 Os parsers de os-release, `php -v`, `php --ini`, `php -m`, pools FPM, alternatives,
 `apt-cache policy` e configurações de nginx/Apache têm testes unitários com fixtures.
 Os planos do provider apt também são testados como dados: `argv` exato, bloqueios,
-rollback, determinismo e ausência de shell/metacaracteres.
+rollback, determinismo e ausência de shell/metacaracteres. O executor, a allowlist, o
+protocolo JSON Lines, o journal e os verificadores têm testes unitários próprios; nenhum
+teste unitário executa comandos reais como root.
 
-O smoke test atual roda o binário em `debian:12` e gera um plano real de instalação sem
-root. A matriz completa de containers (Debian/Ubuntu, com systemd) entra no M1.5.
+O smoke test de leitura roda o binário em `debian:12` e gera um plano real de instalação
+sem root. O smoke de execução em `debian:12` e `ubuntu:24.04` valida sudo, socket,
+allowlist, `apt-get install` e journal até o `systemctl`; como esses containers não têm
+systemd, o E2E completo com systemd e a matriz de containers entram no M1.5.
 
 ## Roadmap
 
 | Marco | Escopo |
 |---|---|
 | **M0** (concluído) | detecção, TUI somente leitura, `status --json`, `doctor` |
-| **M1.1** (atual) | planos apt de instalar/remover/trocar, `--dry-run` e JSON |
-| M1.2 | executor, helper sudo, allowlist e journal |
-| M1.3 | health check, rollback e sury/ondrej opt-in |
+| **M1.1** (concluído) | planos apt de instalar/remover/trocar, `--dry-run` e JSON |
+| **M1.2** (atual) | executor, helper sudo, allowlist, journal e confirmação |
+| M1.3 | health check, rollback automático e sury/ondrej opt-in |
 | M1.4 | ações na TUI |
 | M1.5 | containers Debian/Ubuntu e release |
 | M2 | extensões por versão e suporte a Fedora/RHEL via Remi |

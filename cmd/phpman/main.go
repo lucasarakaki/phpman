@@ -3,10 +3,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/lucasarakaki/phpman/internal/core"
 	"github.com/lucasarakaki/phpman/internal/detect"
+	"github.com/lucasarakaki/phpman/internal/executor"
 	"github.com/lucasarakaki/phpman/internal/provider"
 	"github.com/lucasarakaki/phpman/internal/provider/registry"
 	"github.com/lucasarakaki/phpman/internal/report"
@@ -53,8 +56,7 @@ func main() {
 	case "help", "--help", "-h":
 		usage(os.Stdout)
 	case "__helper":
-		fmt.Fprintln(os.Stderr, "phpman: o helper privilegiado ainda não existe (chega no M1)")
-		os.Exit(2)
+		cmdHelper(ctx, args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "phpman: comando desconhecido %q\n\n", args[0])
 		usage(os.Stderr)
@@ -62,7 +64,36 @@ func main() {
 	}
 }
 
+func cmdHelper(ctx context.Context, args []string) {
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "phpman: o helper privilegiado só pode ser iniciado com sudo")
+		os.Exit(2)
+	}
+	fs := flag.NewFlagSet("__helper", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	socket := fs.String("socket", "", "socket Unix privado do cliente")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *socket == "" {
+		fmt.Fprintln(os.Stderr, "phpman: uso interno inválido de __helper")
+		os.Exit(2)
+	}
+
+	conn, err := executor.ConnectHelperSocket(*socket)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "phpman helper: %v\n", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+	if err := executor.ServeHelper(ctx, conn, conn, executor.JournalPath); err != nil {
+		fmt.Fprintf(os.Stderr, "phpman helper: %v\n", err)
+		os.Exit(1)
+	}
+}
+
 func runTUI(ctx context.Context) {
+	if os.Geteuid() == 0 {
+		fmt.Fprintln(os.Stderr, "phpman: não execute a interface como root; ela pedirá sudo apenas ao aplicar um plano")
+		os.Exit(2)
+	}
 	if !isTerminal(os.Stdout) || !isTerminal(os.Stdin) {
 		snap, err := scan(ctx)
 		if err != nil {
@@ -111,18 +142,25 @@ func cmdDoctor(ctx context.Context, args []string) {
 }
 
 func cmdPlan(ctx context.Context, action core.Action, args []string) {
+	if os.Geteuid() == 0 {
+		fmt.Fprintln(os.Stderr, "phpman: não execute install/remove/switch como root; o helper pedirá sudo quando necessário")
+		os.Exit(2)
+	}
+
 	fs := flag.NewFlagSet(string(action), flag.ExitOnError)
 	dryRun := fs.Bool("dry-run", false, "gera o plano sem executar nada")
-	asJSON := fs.Bool("json", false, "emite o plano em JSON")
+	asJSON := fs.Bool("json", false, "emite o plano em JSON; exige --dry-run")
+	yes := fs.Bool("yes", false, "executa sem pedir confirmação")
+	fs.BoolVar(yes, "y", false, "alias de --yes")
 	noColor := fs.Bool("no-color", false, "desativa cores")
 	_ = fs.Parse(reorderPlanArgs(args))
 
 	if fs.NArg() != 1 {
-		fmt.Fprintf(os.Stderr, "phpman: use phpman %s <X.Y> --dry-run\n", action)
+		fmt.Fprintf(os.Stderr, "phpman: use phpman %s <X.Y> [--dry-run] [--yes]\n", action)
 		os.Exit(2)
 	}
-	if !*dryRun {
-		fmt.Fprintln(os.Stderr, "phpman: a execução real chega no M1.2; use --dry-run para ver o plano")
+	if *asJSON && !*dryRun {
+		fmt.Fprintln(os.Stderr, "phpman: --json exige --dry-run; a saída JSON descreve o plano e não executa")
 		os.Exit(2)
 	}
 
@@ -157,7 +195,71 @@ func cmdPlan(ctx context.Context, action core.Action, args []string) {
 		}
 		return
 	}
-	report.WritePlan(os.Stdout, plan, useColor(*noColor))
+	if *dryRun {
+		report.WritePlan(os.Stdout, plan, useColor(*noColor))
+		return
+	}
+	report.WritePlanExecution(os.Stdout, plan, useColor(*noColor))
+	if len(plan.Steps) == 0 {
+		return
+	}
+
+	if !*yes {
+		if !isTerminal(os.Stdin) {
+			fmt.Fprintln(os.Stderr, "phpman: sem TTY para confirmar; use --yes para executar o plano")
+			os.Exit(2)
+		}
+		ok, err := confirmPlan(os.Stdout, os.Stdin)
+		if err != nil {
+			fail(err)
+		}
+		if !ok {
+			fmt.Fprintln(os.Stdout, "cancelado; nada foi alterado.")
+			return
+		}
+	}
+
+	fmt.Fprintln(os.Stdout, "\nExecutando plano...")
+	var helper *executor.Helper
+	var priv executor.PrivilegedRunner
+	if executor.NeedsHelper(plan) {
+		helper, err = executor.StartSudoHelper(ctx, plan, os.Stdout, os.Stderr)
+		if err != nil {
+			fail(err)
+		}
+		priv = helper
+	}
+
+	ex := &executor.Executor{
+		Priv:     priv,
+		Verifier: executor.SystemVerifier{},
+		Local:    executor.OSCommandRunner{},
+		Out:      os.Stdout,
+		Err:      os.Stderr,
+	}
+	runErr := ex.Run(ctx, plan)
+	if helper != nil {
+		if closeErr := helper.Close(); runErr == nil && closeErr != nil {
+			runErr = fmt.Errorf("encerrando o helper: %w", closeErr)
+		}
+	}
+	if runErr != nil {
+		fail(runErr)
+	}
+}
+
+func confirmPlan(w io.Writer, r io.Reader) (bool, error) {
+	fmt.Fprint(w, "\nExecutar este plano? [s/N] ")
+	line, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "s", "sim", "y", "yes":
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 // reorderPlanArgs lets flags come before or after the version argument. The
@@ -219,21 +321,26 @@ func fail(err error) {
 }
 
 func usage(w *os.File) {
-	fmt.Fprintf(w, `phpman %s — inventário e diagnóstico de PHP no Linux
+	fmt.Fprintf(w, `phpman %s — inventário e gerenciamento de PHP no Linux
 
 Uso:
-  phpman                 abre a interface interativa
-  phpman status          relatório completo do ambiente
-  phpman status --json   inventário em JSON (para scripts)
-  phpman doctor          apenas diagnósticos e sugestões
-  phpman install <X.Y> --dry-run   simula a instalação de uma versão
-  phpman remove <X.Y> --dry-run    simula a remoção de uma versão
-  phpman switch <X.Y> --dry-run    simula a troca da versão ativa
-  phpman version         mostra a versão
-  phpman help            mostra esta ajuda
+  phpman                            abre a interface interativa
+  phpman status                     relatório completo do ambiente
+  phpman status --json              inventário em JSON (para scripts)
+  phpman doctor                     apenas diagnósticos e sugestões
+  phpman install <X.Y> [--dry-run]  instala uma versão (pede sudo)
+  phpman remove <X.Y> [--dry-run]   remove uma versão (pede sudo)
+  phpman switch <X.Y> [--dry-run]   troca a versão ativa (pede sudo)
+  phpman install <X.Y> --yes        executa sem confirmar
+  phpman version                    mostra a versão
+  phpman help                       mostra esta ajuda
 
-Nesta versão nada é alterado e nenhum acesso root é solicitado.
-Os planos podem ser emitidos em JSON com --json. A execução real chega no M1.2.
+Sem --dry-run, o plano é exibido e uma confirmação é pedida antes de qualquer
+alteração. A interface e os comandos rodam como o usuário; apenas o helper
+efêmero __helper roda como root, via sudo. Para executar planos, instale o
+binário root-owned com "sudo make install" em /usr/local/bin.
+
+O plano pode ser emitido em JSON com --dry-run --json.
 
 Variáveis:
   NO_COLOR=1             desativa cores
