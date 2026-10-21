@@ -13,7 +13,8 @@ não devem ser revertidas sem discussão.
    root, por ação, com comandos em allowlist.
 4. **Nunca `sh -c`.** Comandos são `argv`; nada de interpolação de string.
 5. **Toda ação é verificável e reversível na medida do possível.** Health check depois,
-   journal antes, rollback best-effort quando falhar no meio.
+   journal antes, rollback best-effort quando falhar no meio (execução automática no
+   M1.3).
 6. **Determinismo nos testes.** Parsers são testados com fixtures; integração roda em
    containers, não na máquina do desenvolvedor.
 
@@ -60,9 +61,39 @@ Limitações conhecidas:
 
 Limitações desta fatia:
 
-- A execução real ainda não existe; `--dry-run` é obrigatório.
+- A execução real ficou para o M1.2; nesta fatia o `--dry-run` era obrigatório.
 - Sury/ondrej é apenas sinalizado, sem passos para adicionar repositório.
 - A TUI ainda não oferece ações de escrita.
+
+### M1.2 — executor e helper privilegiado (concluído)
+
+- [x] Executor sequencial: roda cada `argv`, verifica o passo e para no primeiro erro.
+- [x] Confirmação humana em `install`, `remove` e `switch`; `--yes`/`-y` para automação.
+- [x] `--dry-run` continua sem sudo e `--json` exige `--dry-run`.
+- [x] Helper `__helper` por JSON Lines em socket Unix, iniciado por
+  `sudo -- <phpman> __helper --socket <path>`.
+- [x] Validação do plano em memória, da ordem dos passos, dos IDs e do `argv` exato.
+- [x] Allowlist: `apt-get install/purge` de pacotes PHP versionados, `systemctl` de
+  unidades `php*-fpm.service` e `update-alternatives --set` das entradas do PHP.
+- [x] Resolução de binários por caminho absoluto confiável, sem `PATH` hijack.
+- [x] Journal `/var/lib/phpman/journal.jsonl` escrito apenas pelo helper, com início e fim
+  de cada comando, código de saída e erro.
+- [x] Verificadores `packages-installed`, `packages-absent`, `binary-version`,
+  `unit-active`, `unit-inactive`, `socket-exists` e `alternative-current`.
+- [x] TUI e subcomandos de escrita recusam execução como root.
+- [x] Testes de allowlist, protocolo, journal, executor e verificadores.
+- [x] Smoke real em `debian:12` e `ubuntu:24.04`: sudo, socket, allowlist,
+  `apt-get install` e journal funcionaram; a execução parou no `systemctl` porque os
+  containers não têm systemd, como esperado.
+
+Limitações desta fatia:
+
+- O rollback é exibido e validado, mas ainda não é executado automaticamente (M1.3).
+- `switch` só altera `update-alternatives`; não reinicia FPM nem reescreve vhosts.
+- A TUI continua somente leitura (M1.4).
+- Sury/ondrej continua apenas sinalizado; a inclusão opt-in entra no M1.3.
+- O helper é aberto por comando. Reutilizar uma sessão no TUI será decidido no M1.4.
+- O teste de execução real em container com systemd entra no M1.5.
 
 ### Provider
 
@@ -109,8 +140,9 @@ Regras:
 - `VerifyKind` é um enum de dados (`binary-version`, `unit-active`, `alternative-current`
   etc.); o executor traduz cada valor para a verificação concreta.
 - O executor só aceita `argv`; verifica o passo anterior antes do próximo.
-- `--dry-run` imprime o plano e não pede sudo.
-- Falha no meio grava o journal e oferece rollback.
+- `--dry-run` imprime o plano e não pede sudo; sem ele, há confirmação e `--yes` pula a
+  pergunta.
+- Falha no meio grava o journal e para a execução. O rollback automático entra no M1.3.
 
 ### Fluxo de instalação
 
@@ -140,48 +172,73 @@ Regras:
 
 ### Helper privilegiado
 
-A UI inicia **um** helper por sessão:
+No M1.2 o CLI abre **um helper por plano**; a reutilização por sessão de TUI será tratada
+no M1.4:
 
 ```
-UI (usuário) --sudo -S--> phpman __helper <--JSON lines--> exec/argv
+CLI/UI (usuário) --sudo--> <phpman> __helper --socket <path>
+       │                                      │
+       └──────── JSON Lines no socket Unix ───┘
 ```
+
+O sudo lê a senha diretamente do terminal. O phpman não usa `-S`, não lê a senha e não a
+coloca em argv, ambiente, log ou journal. O socket fica em um diretório 0700 do usuário,
+com arquivo 0600; `SO_PEERCRED` confirma root no cliente e o `SUDO_UID` no helper.
 
 Mensagens do cliente:
 
 ```json
-{"id":1,"op":"exec","argv":["apt-get","install","-y","php8.3-fpm"],"step":"install:8.3:3"}
+{"op":"plan","plan":{"schema":1,"action":"install","version":"8.3","steps":[...]}}
+{"op":"exec","id":"install-packages","argv":["apt-get","install","-y","php8.3-fpm"]}
+{"op":"done"}
 ```
 
 Eventos do helper:
 
 ```json
-{"id":1,"stream":"stdout","line":"..."}
-{"id":1,"exit":0}
+{"kind":"ready"}
+{"kind":"stdout","id":"install-packages","line":"..."}
+{"kind":"stderr","id":"install-packages","line":"..."}
+{"kind":"exit","id":"install-packages","exit":0}
+{"kind":"error","id":"install-packages","error":"..."}
 ```
 
-Regras de segurança:
+Regras de segurança implementadas:
 
-- Senha lida uma vez, nunca logada, nunca em argv, nunca em arquivo.
+- Senha lida pelo sudo, nunca logada, nunca em argv, nunca em arquivo.
 - Helper recusa `sh`, `bash`, redirecionamentos e binários fora da allowlist.
-- Cada `exec` referencia um passo de um plano assinado em memória; o helper valida ID e
-  `argv`.
-- Journal em `/var/lib/phpman/journal.jsonl`, escrito apenas pelo helper.
-- Sessão encerrada ao sair do TUI; sem sudo persistente.
+- Cada `exec` referencia um passo do plano recebido em memória; o helper valida schema,
+  ação, versão, ID, ordem, `argv` exato e `needs_root`.
+- Binários são resolvidos por caminhos absolutos confiáveis, nunca por `PATH`.
+- O JSON Lines não passa pelo stdin/stdout do sudo: usa um socket Unix privado, o que
+  evita echo/tradução de bytes quando o sudo habilita `use_pty`.
+- Allowlist: `apt-get install/purge -y` de pacotes PHP versionados; `systemctl`
+  enable/disable/start/stop/restart de `php*-fpm.service`; `update-alternatives --set`
+  de `php`, `phpize`, `php-config`, `phpdbg` e `phar`.
+- Journal em `/var/lib/phpman/journal.jsonl`, escrito apenas pelo helper, com `start` e
+  `finish`, código de saída e erro.
+- O executável do helper precisa ser root-owned, não gravável por grupo/outros e estar em
+  diretório root-owned; `./bin/phpman` e `go run` são recusados para execução.
+- O helper encerra no `done` ou no EOF do cliente; não há sudo persistente.
 
 ### Testes
 
-- Unitários: geração de plano, parsing de saídas, allowlist, rollback.
+- Unitários: geração de plano, parsing de saídas, allowlist, protocolo, journal, executor e
+  verificadores.
 - Containers (podman/docker) em CI: Debian 12/13, Ubuntu 22.04/24.04.
 - E2E real (com systemd) em VM ou podman com systemd: instalar → trocar → remover.
 - Teste de contrato: `--dry-run` deve produzir exatamente os `argv` executados.
 
 ### Critérios de aceite
 
-- Container limpo → instalar 8.2 → instalar 8.3 via repo externo → trocar → remover 8.2 →
-  estado original, em Debian 12 e Ubuntu 24.04.
+- `--dry-run` e leitura continuam funcionando sem sudo.
+- O helper recusa `argv` divergente, passo fora de ordem, comando fora da allowlist e
+  plano sem root.
 - Nenhuma senha em log, argv, journal ou arquivo temporário.
-- Falha simulada no meio do plano deixa journal consistente e rollback executável.
-- Leitura continua funcionando sem sudo.
+- Falha simulada no meio do plano deixa o journal consistente; a execução para no primeiro
+  erro.
+- Container limpo → instalar 8.2 → instalar 8.3 via repo externo → trocar → remover 8.2 →
+  estado original, em Debian 12 e Ubuntu 24.04 (E2E no M1.5).
 
 ## M2 — extensões e Fedora/RHEL
 
