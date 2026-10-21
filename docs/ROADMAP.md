@@ -48,27 +48,44 @@ Limitações conhecidas:
 
 ## M1 — instalar, remover e trocar (Debian/Ubuntu)
 
+### M1.1 — planejamento e dry-run (concluído)
+
+- [x] Modelo serializável `Plan`/`Step`, com verificadores declarativos.
+- [x] Provider apt para `install`, `remove` e `switch`, sem efeitos colaterais.
+- [x] `install/remove/switch --dry-run` e `--dry-run --json`.
+- [x] Bloqueio da remoção da versão ativa.
+- [x] Avisos de vhosts afetados e de repositório de terceiros.
+- [x] Testes de `argv` exato, determinismo, bloqueios e ausência de shell.
+- [x] Smoke test manual em `debian:12`.
+
+Limitações desta fatia:
+
+- A execução real ainda não existe; `--dry-run` é obrigatório.
+- Sury/ondrej é apenas sinalizado, sem passos para adicionar repositório.
+- A TUI ainda não oferece ações de escrita.
+
 ### Provider
 
 ```go
 type Provider interface {
-    Detect(ctx context.Context) (Info, error)
-    Installed(ctx context.Context) ([]core.Version, error)
-    Available(ctx context.Context) ([]core.AvailableVersion, error)
-    PlanInstall(v core.Version, opts Options) (core.Plan, error)
-    PlanRemove(v core.Version) (core.Plan, error)
-    PlanSwitch(v core.Version) (core.Plan, error)
+    PlanInstall(snap *core.Snapshot, raw string, opts Options) (*core.Plan, error)
+    PlanRemove(snap *core.Snapshot, raw string) (*core.Plan, error)
+    PlanSwitch(snap *core.Snapshot, raw string) (*core.Plan, error)
 }
 ```
 
-`internal/provider/apt` é a primeira implementação. A matriz de capacidades por família
-(YAML embutido com `go:embed`) substitui os `if` de distribuição quando o segundo provider
-entrar.
+O provider consome o `Snapshot` já produzido pela detecção; não duplica inventário nem
+executa comandos. `internal/provider/apt` é a primeira implementação. A matriz de
+capacidades por família (YAML embutido com `go:embed`) substitui os `if` de distribuição
+quando o segundo provider entrar.
 
 ### Plano e passos
 
 ```go
 type Plan struct {
+    Schema   int
+    Action   Action
+    Version  string
     Summary  string
     NeedsRoot bool
     Warnings []string
@@ -77,15 +94,20 @@ type Plan struct {
 }
 
 type Step struct {
-    ID, Desc string
-    Argv     []string // vazio = verificação interna
-    Verify   func(context.Context, exec.Runner) error
+    ID, Description string
+    Argv            []string // vazio = verificação interna
+    NeedsRoot       bool
+    Verify          VerifyKind // verificador declarativo
+    VerifyArgs      []string
+    Optional        bool
 }
 ```
 
 Regras:
 
-- `Plan` é serializável e idempotente na geração.
+- `Plan` é serializável, sem funções nem timestamps, e idempotente na geração.
+- `VerifyKind` é um enum de dados (`binary-version`, `unit-active`, `alternative-current`
+  etc.); o executor traduz cada valor para a verificação concreta.
 - O executor só aceita `argv`; verifica o passo anterior antes do próximo.
 - `--dry-run` imprime o plano e não pede sudo.
 - Falha no meio grava o journal e oferece rollback.
