@@ -17,12 +17,22 @@ func WritePlanJSON(w io.Writer, plan *core.Plan) error {
 	return enc.Encode(plan)
 }
 
-// WritePlan renders a plan as human-readable text. The banner makes it clear
-// that no command has been executed.
+// WritePlan renders a dry-run plan. The banner makes it clear that no command
+// has been executed.
 func WritePlan(w io.Writer, plan *core.Plan, color bool) {
+	writePlan(w, plan, color, "· simulação, nada será alterado", "")
+}
+
+// WritePlanExecution renders a plan that is about to run. It still shows the
+// exact argv and the planned rollback, but does not pretend to be a dry-run.
+func WritePlanExecution(w io.Writer, plan *core.Plan, color bool) {
+	writePlan(w, plan, color, "· revise antes de executar", "O rollback está planejado, mas a execução automática chega no M1.3.")
+}
+
+func writePlan(w io.Writer, plan *core.Plan, color bool, banner, rollbackNote string) {
 	p := NewPainter(color)
 
-	fmt.Fprintf(w, "%s %s\n", p.Bold("phpman plano"), p.Dim("· simulação, nada será alterado"))
+	fmt.Fprintf(w, "%s %s\n", p.Bold("phpman plano"), p.Dim(banner))
 	fmt.Fprintf(w, "%s\n", p.Bold(plan.Summary))
 	fmt.Fprintf(w, "%s\n", p.Dim(fmt.Sprintf("ação %s · versão %s · requer root: %s",
 		plan.Action, plan.Version, yesNo(plan.NeedsRoot))))
@@ -44,6 +54,9 @@ func WritePlan(w io.Writer, plan *core.Plan, color bool) {
 	if len(plan.Rollback) > 0 {
 		section(w, p, "rollback")
 		writePlanSteps(w, p, plan.Rollback)
+		if rollbackNote != "" {
+			fmt.Fprintf(w, "  %s\n", p.Dim(rollbackNote))
+		}
 	}
 }
 

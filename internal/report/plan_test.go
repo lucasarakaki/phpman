@@ -58,6 +58,43 @@ func TestWritePlan(t *testing.T) {
 	}
 }
 
+func TestWritePlanExecution(t *testing.T) {
+	plan := &core.Plan{
+		Schema:  core.PlanSchema,
+		Action:  core.ActionRemove,
+		Version: "8.2",
+		Summary: "Remover PHP 8.2",
+		Steps: []core.Step{{
+			ID:          "purge",
+			Description: "Remover pacotes",
+			Argv:        []string{"apt-get", "purge", "-y", "php8.2-cli"},
+			NeedsRoot:   true,
+		}},
+		Rollback: []core.Step{{
+			ID:          "rollback",
+			Description: "Reinstalar pacotes",
+			Argv:        []string{"apt-get", "install", "-y", "php8.2-cli"},
+			NeedsRoot:   true,
+		}},
+	}
+
+	var buf bytes.Buffer
+	WritePlanExecution(&buf, plan, false)
+	out := buf.String()
+	for _, want := range []string{
+		"revise antes de executar",
+		"apt-get purge -y php8.2-cli",
+		"rollback está planejado",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("saída não contém %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "nada será alterado") {
+		t.Errorf("plano de execução ainda se apresenta como simulação:\n%s", out)
+	}
+}
+
 func TestWritePlanJSON(t *testing.T) {
 	plan := &core.Plan{
 		Schema:  core.PlanSchema,
