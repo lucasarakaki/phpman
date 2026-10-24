@@ -8,9 +8,10 @@ import "github.com/lucasarakaki/phpman/internal/core"
 // helper re-encodes each line as a JSON event.
 
 const (
-	opPlan = "plan"
-	opExec = "exec"
-	opDone = "done"
+	opPlan     = "plan"
+	opExec     = "exec"
+	opRollback = "rollback"
+	opDone     = "done"
 
 	kindReady  = "ready"
 	kindStdout = "stdout"

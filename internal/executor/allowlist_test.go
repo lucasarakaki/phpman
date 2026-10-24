@@ -73,13 +73,28 @@ func TestValidatePlan(t *testing.T) {
 				Verify: core.VerifyBinaryVersion,
 			},
 		},
+		Rollback: []core.Step{
+			{
+				ID:        "rollback-remove",
+				Argv:      []string{"apt-get", "purge", "-y", "php8.3-cli"},
+				NeedsRoot: true,
+				Verify:    core.VerifyPackagesAbsent,
+			},
+			{
+				ID:     "rollback-verify",
+				Verify: core.VerifyPackagesAbsent,
+			},
+		},
 	}
-	steps, err := validatePlan(valid)
+	steps, rollback, err := validatePlan(valid)
 	if err != nil {
 		t.Fatalf("plano válido rejeitado: %v", err)
 	}
 	if _, ok := steps["install"]; !ok {
 		t.Error("passo install não foi indexado")
+	}
+	if _, ok := rollback["rollback-remove"]; !ok {
+		t.Error("passo rollback-remove não foi indexado")
 	}
 
 	cases := []struct {
@@ -118,7 +133,7 @@ func TestValidatePlan(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := validatePlan(tc.plan); err == nil {
+			if _, _, err := validatePlan(tc.plan); err == nil {
 				t.Error("plano inválido aceito")
 			}
 		})

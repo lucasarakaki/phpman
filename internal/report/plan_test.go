@@ -84,7 +84,7 @@ func TestWritePlanExecution(t *testing.T) {
 	for _, want := range []string{
 		"revise antes de executar",
 		"apt-get purge -y php8.2-cli",
-		"rollback está planejado",
+		"rollback abaixo será executado automaticamente",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("saída não contém %q:\n%s", want, out)

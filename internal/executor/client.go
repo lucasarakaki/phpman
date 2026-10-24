@@ -17,9 +17,11 @@ import (
 
 const helperConnectTimeout = 2 * time.Minute
 
-// PrivilegedRunner executes plan steps through the root helper.
+// PrivilegedRunner executes plan steps through the root helper. Rollback steps
+// use a separate phase so the helper can enforce their order independently.
 type PrivilegedRunner interface {
 	Run(ctx context.Context, step core.Step) error
+	RunRollback(ctx context.Context, step core.Step) error
 	Close() error
 }
 
@@ -199,10 +201,18 @@ func (h *Helper) waitReady() error {
 }
 
 func (h *Helper) Run(ctx context.Context, step core.Step) error {
+	return h.run(ctx, step, opExec)
+}
+
+func (h *Helper) RunRollback(ctx context.Context, step core.Step) error {
+	return h.run(ctx, step, opRollback)
+}
+
+func (h *Helper) run(ctx context.Context, step core.Step, op string) error {
 	if len(step.Argv) == 0 {
 		return fmt.Errorf("passo %q não tem comando para executar", step.ID)
 	}
-	if err := h.send(request{Op: opExec, ID: step.ID, Argv: step.Argv}); err != nil {
+	if err := h.send(request{Op: op, ID: step.ID, Argv: step.Argv}); err != nil {
 		return fmt.Errorf("não foi possível enviar o passo %s: %w", step.ID, err)
 	}
 	for {

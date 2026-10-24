@@ -11,13 +11,24 @@ import (
 )
 
 type fakePriv struct {
-	steps []core.Step
-	err   error
+	steps         []core.Step
+	rollbackSteps []core.Step
+	err           error
+	rollbackErr   error
+	failStep      string
 }
 
 func (f *fakePriv) Run(_ context.Context, step core.Step) error {
 	f.steps = append(f.steps, step)
+	if f.failStep != "" && step.ID == f.failStep {
+		return errors.New("falhou")
+	}
 	return f.err
+}
+
+func (f *fakePriv) RunRollback(_ context.Context, step core.Step) error {
+	f.rollbackSteps = append(f.rollbackSteps, step)
+	return f.rollbackErr
 }
 
 func (f *fakePriv) Close() error { return nil }
@@ -82,6 +93,89 @@ func TestExecutorStopsOnCommandFailure(t *testing.T) {
 	}
 }
 
+func TestExecutorRunsRollbackAfterFailure(t *testing.T) {
+	plan := &core.Plan{
+		Schema:  core.PlanSchema,
+		Action:  core.ActionInstall,
+		Version: "8.3",
+		Steps: []core.Step{
+			{ID: "install", Argv: []string{"apt-get", "install", "-y", "php8.3-cli"}, NeedsRoot: true},
+			{ID: "enable", Argv: []string{"systemctl", "enable", "--now", "php8.3-fpm.service"}, NeedsRoot: true},
+		},
+		Rollback: []core.Step{
+			{ID: "rollback-stop", Argv: []string{"systemctl", "disable", "--now", "php8.3-fpm.service"}, NeedsRoot: true},
+			{ID: "rollback-remove", Argv: []string{"apt-get", "purge", "-y", "php8.3-cli"}, NeedsRoot: true},
+		},
+	}
+	priv := &fakePriv{failStep: "enable"}
+	var out, errOut bytes.Buffer
+	ex := &Executor{Priv: priv, Verifier: &fakeVerifier{}, Out: &out, Err: &errOut}
+
+	err := ex.Run(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), "rollback automático executado") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(priv.steps) != 2 {
+		t.Fatalf("passos normais = %+v", priv.steps)
+	}
+	if len(priv.rollbackSteps) != 2 || priv.rollbackSteps[0].ID != "rollback-stop" || priv.rollbackSteps[1].ID != "rollback-remove" {
+		t.Errorf("rollback = %+v", priv.rollbackSteps)
+	}
+	if !strings.Contains(out.String(), "Rollback automático") || !strings.Contains(out.String(), "rollback concluído") {
+		t.Errorf("saída = %q", out.String())
+	}
+}
+
+func TestExecutorReportsRollbackFailure(t *testing.T) {
+	plan := &core.Plan{
+		Schema:  core.PlanSchema,
+		Action:  core.ActionInstall,
+		Version: "8.3",
+		Steps: []core.Step{
+			{ID: "install", Argv: []string{"apt-get", "install", "-y", "php8.3-cli"}, NeedsRoot: true},
+		},
+		Rollback: []core.Step{
+			{ID: "rollback-remove", Argv: []string{"apt-get", "purge", "-y", "php8.3-cli"}, NeedsRoot: true},
+		},
+	}
+	priv := &fakePriv{failStep: "install", rollbackErr: errors.New("sem rede")}
+	var errOut bytes.Buffer
+	ex := &Executor{Priv: priv, Verifier: &fakeVerifier{}, Err: &errOut}
+
+	err := ex.Run(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), "rollback automático incompleto") || !strings.Contains(err.Error(), "rollback-remove") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(errOut.String(), "aviso: rollback rollback-remove falhou") {
+		t.Errorf("stderr = %q", errOut.String())
+	}
+}
+
+func TestExecutorSkipsRollbackOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	plan := &core.Plan{
+		Schema:  core.PlanSchema,
+		Action:  core.ActionInstall,
+		Version: "8.3",
+		Steps: []core.Step{
+			{ID: "install", Argv: []string{"apt-get", "install", "-y", "php8.3-cli"}, NeedsRoot: true},
+		},
+		Rollback: []core.Step{
+			{ID: "rollback-remove", Argv: []string{"apt-get", "purge", "-y", "php8.3-cli"}, NeedsRoot: true},
+		},
+	}
+	priv := &fakePriv{}
+	ex := &Executor{Priv: priv, Verifier: &fakeVerifier{}}
+
+	if err := ex.Run(ctx, plan); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, esperado context.Canceled", err)
+	}
+	if len(priv.steps) != 0 || len(priv.rollbackSteps) != 0 {
+		t.Errorf("executou passos com contexto cancelado: normal=%+v rollback=%+v", priv.steps, priv.rollbackSteps)
+	}
+}
+
 func TestExecutorStopsOnRequiredVerificationFailure(t *testing.T) {
 	plan := &core.Plan{Steps: []core.Step{
 		{ID: "verify", Verify: core.VerifyBinaryVersion},
@@ -130,5 +224,14 @@ func TestNeedsHelper(t *testing.T) {
 	plan.Steps = append(plan.Steps, core.Step{ID: "install", Argv: []string{"apt-get", "install", "-y", "php8.3-cli"}, NeedsRoot: true})
 	if !NeedsHelper(plan) {
 		t.Error("plano com passo root precisa de helper")
+	}
+
+	rollbackOnly := &core.Plan{Steps: []core.Step{
+		{ID: "verify", Verify: core.VerifyBinaryVersion},
+	}, Rollback: []core.Step{
+		{ID: "rollback", Argv: []string{"apt-get", "purge", "-y", "php8.3-cli"}, NeedsRoot: true},
+	}}
+	if !NeedsHelper(rollbackOnly) {
+		t.Error("plano com rollback root precisa de helper")
 	}
 }

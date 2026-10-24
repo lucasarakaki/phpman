@@ -23,6 +23,7 @@ const (
 	VerifyBinaryVersion      VerifyKind = "binary-version"
 	VerifyUnitActive         VerifyKind = "unit-active"
 	VerifyUnitInactive       VerifyKind = "unit-inactive"
+	VerifyUnitEnabled        VerifyKind = "unit-enabled"
 	VerifySocketExists       VerifyKind = "socket-exists"
 	VerifyAlternativeCurrent VerifyKind = "alternative-current"
 )
