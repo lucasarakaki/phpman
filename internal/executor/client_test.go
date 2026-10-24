@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,7 +34,8 @@ func TestHelperClientProtocol(t *testing.T) {
 			return nil
 		}}
 		resolve := func(argv []string) ([]string, error) { return argv, nil }
-		serverCh <- serveHelper(context.Background(), conn, conn, filepath.Join(t.TempDir(), "journal.jsonl"), runner, resolve)
+		writeFile := func(string, string, os.FileMode) error { return nil }
+		serverCh <- serveHelper(context.Background(), conn, conn, filepath.Join(t.TempDir(), "journal.jsonl"), runner, resolve, writeFile)
 	}()
 
 	conn, err := net.Dial("unix", path)

@@ -30,7 +30,7 @@ func NeedsHelper(plan *core.Plan) bool {
 		return false
 	}
 	for _, step := range append(append([]core.Step{}, plan.Steps...), plan.Rollback...) {
-		if len(step.Argv) > 0 && step.NeedsRoot {
+		if step.NeedsRoot && (len(step.Argv) > 0 || step.File != nil) {
 			return true
 		}
 	}
@@ -88,7 +88,7 @@ func (e *Executor) Run(ctx context.Context, plan *core.Plan) error {
 // rollback flag only selects the privileged protocol phase.
 func (e *Executor) executeStep(ctx context.Context, step core.Step, rollback bool) error {
 	switch {
-	case len(step.Argv) > 0 && step.NeedsRoot:
+	case step.NeedsRoot && (len(step.Argv) > 0 || step.File != nil):
 		if e.Priv == nil {
 			return fmt.Errorf("passo %s exige root, mas o helper não foi iniciado", step.ID)
 		}
@@ -105,6 +105,8 @@ func (e *Executor) executeStep(ctx context.Context, step core.Step, rollback boo
 		if err := e.Local.Run(ctx, step.Argv, e.Out, e.Err); err != nil {
 			return fmt.Errorf("passo %s: %w", step.ID, err)
 		}
+	case step.File != nil:
+		return fmt.Errorf("passo %s grava arquivo sem exigir root", step.ID)
 	case step.Verify == "":
 		return fmt.Errorf("passo %s não tem comando nem verificação", step.ID)
 	}

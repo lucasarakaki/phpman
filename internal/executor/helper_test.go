@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,7 +41,7 @@ func testPlan() *core.Plan {
 	}
 }
 
-func startHelperServer(t *testing.T, plan *core.Plan, runner CommandRunner, resolve func([]string) ([]string, error)) (*json.Encoder, *json.Decoder, <-chan error) {
+func startHelperServer(t *testing.T, plan *core.Plan, runner CommandRunner, resolve func([]string) ([]string, error), writeFile FileWriter) (*json.Encoder, *json.Decoder, <-chan error) {
 	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
@@ -48,7 +49,7 @@ func startHelperServer(t *testing.T, plan *core.Plan, runner CommandRunner, reso
 	journalPath := filepath.Join(t.TempDir(), "journal.jsonl")
 
 	go func() {
-		err := serveHelper(context.Background(), inR, outW, journalPath, runner, resolve)
+		err := serveHelper(context.Background(), inR, outW, journalPath, runner, resolve, writeFile)
 		_ = outW.Close()
 		done <- err
 	}()
@@ -72,6 +73,8 @@ func startHelperServer(t *testing.T, plan *core.Plan, runner CommandRunner, reso
 	return enc, dec, done
 }
 
+func noopFileWriter(string, string, os.FileMode) error { return nil }
+
 func TestServeHelperExecutesPlanStep(t *testing.T) {
 	plan := testPlan()
 	var gotArgv []string
@@ -86,7 +89,7 @@ func TestServeHelperExecutesPlanStep(t *testing.T) {
 		return resolved, nil
 	}
 
-	enc, dec, done := startHelperServer(t, plan, runner, resolve)
+	enc, dec, done := startHelperServer(t, plan, runner, resolve, noopFileWriter)
 	if err := enc.Encode(request{Op: opExec, ID: "install", Argv: plan.Steps[0].Argv}); err != nil {
 		t.Fatalf("enviar exec: %v", err)
 	}
@@ -142,7 +145,7 @@ func TestServeHelperExecutesRollbackStepInOwnPhase(t *testing.T) {
 	}}
 	resolve := func(argv []string) ([]string, error) { return argv, nil }
 
-	enc, dec, done := startHelperServer(t, plan, runner, resolve)
+	enc, dec, done := startHelperServer(t, plan, runner, resolve, noopFileWriter)
 	runStep := func(req request) {
 		t.Helper()
 		if err := enc.Encode(req); err != nil {
@@ -189,7 +192,7 @@ func TestServeHelperRejectsRollbackOutOfOrder(t *testing.T) {
 	resolve := func(argv []string) ([]string, error) { return argv, nil }
 	plan := testPlan()
 
-	enc, dec, done := startHelperServer(t, plan, runner, resolve)
+	enc, dec, done := startHelperServer(t, plan, runner, resolve, noopFileWriter)
 	if err := enc.Encode(request{Op: opRollback, ID: plan.Steps[0].ID, Argv: plan.Steps[0].Argv}); err != nil {
 		t.Fatalf("enviar rollback: %v", err)
 	}
@@ -216,7 +219,7 @@ func TestServeHelperRejectsArgvOutsidePlan(t *testing.T) {
 	}}
 	resolve := func(argv []string) ([]string, error) { return argv, nil }
 
-	enc, dec, done := startHelperServer(t, testPlan(), runner, resolve)
+	enc, dec, done := startHelperServer(t, testPlan(), runner, resolve, noopFileWriter)
 	if err := enc.Encode(request{Op: opExec, ID: "install", Argv: []string{"apt-get", "purge", "-y", "php8.3-cli"}}); err != nil {
 		t.Fatalf("enviar exec: %v", err)
 	}
@@ -235,6 +238,104 @@ func TestServeHelperRejectsArgvOutsidePlan(t *testing.T) {
 	}
 }
 
+func TestServeHelperWritesPlanFile(t *testing.T) {
+	plan := &core.Plan{
+		Schema:  core.PlanSchema,
+		Action:  core.ActionInstall,
+		Version: "8.3",
+		Steps: []core.Step{{
+			ID: "write-source",
+			File: &core.FileWrite{
+				Path:    surySourceFile,
+				Content: "deb [signed-by=" + suryKeyring + "] https://packages.sury.org/php/ bookworm main\n",
+				Mode:    0o644,
+			},
+			NeedsRoot: true,
+		}},
+	}
+	var gotPath, gotContent string
+	var gotMode os.FileMode
+	writeFile := func(path, content string, mode os.FileMode) error {
+		gotPath, gotContent, gotMode = path, content, mode
+		return nil
+	}
+	runner := fakeCommandRunner{run: func(context.Context, []string, io.Writer, io.Writer) error {
+		t.Error("runner não deveria ser chamado para escrita de arquivo")
+		return nil
+	}}
+	resolve := func(argv []string) ([]string, error) { return argv, nil }
+
+	enc, dec, done := startHelperServer(t, plan, runner, resolve, writeFile)
+	if err := enc.Encode(request{Op: opExec, ID: "write-source"}); err != nil {
+		t.Fatalf("enviar exec: %v", err)
+	}
+	var ev event
+	for {
+		if err := dec.Decode(&ev); err != nil {
+			t.Fatalf("ler evento: %v", err)
+		}
+		if ev.Kind == kindExit {
+			break
+		}
+		if ev.Kind == kindError {
+			t.Fatalf("erro inesperado: %s", ev.Error)
+		}
+	}
+	if ev.Exit == nil || *ev.Exit != 0 {
+		t.Fatalf("exit = %v, esperado 0", ev.Exit)
+	}
+	if gotPath != surySourceFile || gotContent != plan.Steps[0].File.Content || gotMode != 0o644 {
+		t.Errorf("escrita = path %q mode %#o content %q", gotPath, gotMode, gotContent)
+	}
+
+	if err := enc.Encode(request{Op: opDone}); err != nil {
+		t.Fatalf("enviar done: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("serveHelper: %v", err)
+	}
+}
+
+func TestServeHelperReportsFileFailure(t *testing.T) {
+	plan := &core.Plan{
+		Schema:  core.PlanSchema,
+		Action:  core.ActionInstall,
+		Version: "8.3",
+		Steps: []core.Step{{
+			ID:        "write-source",
+			File:      &core.FileWrite{Path: surySourceFile, Content: "deb [signed-by=" + suryKeyring + "] https://packages.sury.org/php/ bookworm main\n", Mode: 0o644},
+			NeedsRoot: true,
+		}},
+	}
+	writeFile := func(string, string, os.FileMode) error { return errors.New("disco cheio") }
+	runner := fakeCommandRunner{run: func(context.Context, []string, io.Writer, io.Writer) error { return nil }}
+	resolve := func(argv []string) ([]string, error) { return argv, nil }
+
+	enc, dec, done := startHelperServer(t, plan, runner, resolve, writeFile)
+	if err := enc.Encode(request{Op: opExec, ID: "write-source"}); err != nil {
+		t.Fatalf("enviar exec: %v", err)
+	}
+	var ev event
+	for {
+		if err := dec.Decode(&ev); err != nil {
+			t.Fatalf("ler evento: %v", err)
+		}
+		if ev.Kind == kindExit {
+			break
+		}
+	}
+	if ev.Exit == nil || *ev.Exit != 1 || !strings.Contains(ev.Error, "disco cheio") {
+		t.Fatalf("evento = %+v, esperado exit 1 com erro", ev)
+	}
+
+	if err := enc.Encode(request{Op: opDone}); err != nil {
+		t.Fatalf("enviar done: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("serveHelper: %v", err)
+	}
+}
+
 func TestServeHelperReportsCommandFailure(t *testing.T) {
 	runner := fakeCommandRunner{run: func(_ context.Context, _ []string, stdout, stderr io.Writer) error {
 		_, _ = io.WriteString(stderr, "falhou\n")
@@ -242,7 +343,7 @@ func TestServeHelperReportsCommandFailure(t *testing.T) {
 	}}
 	resolve := func(argv []string) ([]string, error) { return argv, nil }
 
-	enc, dec, done := startHelperServer(t, testPlan(), runner, resolve)
+	enc, dec, done := startHelperServer(t, testPlan(), runner, resolve, noopFileWriter)
 	if err := enc.Encode(request{Op: opExec, ID: "install", Argv: testPlan().Steps[0].Argv}); err != nil {
 		t.Fatalf("enviar exec: %v", err)
 	}

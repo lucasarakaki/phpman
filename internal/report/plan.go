@@ -37,6 +37,16 @@ func writePlan(w io.Writer, plan *core.Plan, color bool, banner, rollbackNote st
 	fmt.Fprintf(w, "%s\n", p.Dim(fmt.Sprintf("ação %s · versão %s · requer root: %s",
 		plan.Action, plan.Version, yesNo(plan.NeedsRoot))))
 
+	if plan.Repository != nil {
+		section(w, p, "repositório de terceiros")
+		fmt.Fprintf(w, "  %-12s %s\n", p.Dim("nome"), p.Bold(plan.Repository.Name))
+		fmt.Fprintf(w, "  %-12s %s\n", p.Dim("url"), plan.Repository.URL)
+		fmt.Fprintf(w, "  %-12s %s\n", p.Dim("chave"), plan.Repository.KeyURL)
+		fmt.Fprintf(w, "  %-12s %s %s\n", p.Dim("keyring"), plan.Repository.Keyring, p.Dim("(signed-by)"))
+		fmt.Fprintf(w, "  %-12s %s\n", p.Dim("fingerprint"), p.Yellow(plan.Repository.Fingerprint))
+		fmt.Fprintf(w, "  %-12s %s\n", p.Dim("arquivo"), plan.Repository.SourceFile)
+	}
+
 	if len(plan.Warnings) > 0 {
 		section(w, p, "avisos")
 		for _, warning := range plan.Warnings {
@@ -66,7 +76,17 @@ func writePlanSteps(w io.Writer, p Painter, steps []core.Step) {
 		switch {
 		case len(step.Argv) > 0:
 			fmt.Fprintf(w, "     %s\n", p.Cyan(strings.Join(step.Argv, " ")))
-		case step.Verify != "":
+		case step.File != nil:
+			fmt.Fprintf(w, "     %s %s\n", p.Dim("arquivo:"), step.File.Path)
+			content := strings.TrimSuffix(step.File.Content, "\n")
+			for _, line := range strings.Split(content, "\n") {
+				if line == "" {
+					continue
+				}
+				fmt.Fprintf(w, "     %s %s\n", p.Dim(">"), line)
+			}
+		}
+		if step.Verify != "" {
 			verify := string(step.Verify)
 			if len(step.VerifyArgs) > 0 {
 				verify += " " + strings.Join(step.VerifyArgs, " ")

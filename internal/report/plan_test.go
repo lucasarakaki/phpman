@@ -58,6 +58,53 @@ func TestWritePlan(t *testing.T) {
 	}
 }
 
+func TestWritePlanThirdParty(t *testing.T) {
+	plan := &core.Plan{
+		Schema:    core.PlanSchema,
+		Action:    core.ActionInstall,
+		Version:   "8.4",
+		Summary:   "Instalar PHP 8.4 via Sury/ondrej",
+		NeedsRoot: true,
+		Repository: &core.Repository{
+			Name:        "Sury/ondrej",
+			URL:         "https://packages.sury.org/php/",
+			KeyURL:      "https://packages.sury.org/php/apt.gpg",
+			Keyring:     "/usr/share/keyrings/deb.sury.org-php.gpg",
+			SourceFile:  "/etc/apt/sources.list.d/sury-php.list",
+			Fingerprint: "15058500A0235D97F5D10063B188E2B695BD4743",
+		},
+		Steps: []core.Step{{
+			ID:          "write-source",
+			Description: "Configurar o repositório",
+			File: &core.FileWrite{
+				Path:    "/etc/apt/sources.list.d/sury-php.list",
+				Content: "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ bookworm main\n",
+				Mode:    0o644,
+			},
+			NeedsRoot: true,
+			Verify:    core.VerifyFileContent,
+		}},
+	}
+
+	var buf bytes.Buffer
+	WritePlan(&buf, plan, false)
+	out := buf.String()
+	for _, want := range []string{
+		"REPOSITÓRIO DE TERCEIROS",
+		"https://packages.sury.org/php/",
+		"https://packages.sury.org/php/apt.gpg",
+		"/usr/share/keyrings/deb.sury.org-php.gpg",
+		"15058500A0235D97F5D10063B188E2B695BD4743",
+		"arquivo: /etc/apt/sources.list.d/sury-php.list",
+		"deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ bookworm main",
+		"verificação: file-content",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("saída não contém %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestWritePlanExecution(t *testing.T) {
 	plan := &core.Plan{
 		Schema:  core.PlanSchema,
@@ -101,6 +148,10 @@ func TestWritePlanJSON(t *testing.T) {
 		Action:  core.ActionSwitch,
 		Version: "8.3",
 		Summary: "Trocar para PHP 8.3",
+		Repository: &core.Repository{
+			Name:        "Sury/ondrej",
+			Fingerprint: "15058500A0235D97F5D10063B188E2B695BD4743",
+		},
 		Steps: []core.Step{{
 			ID:          "switch-php",
 			Description: "Trocar php",
@@ -124,5 +175,8 @@ func TestWritePlanJSON(t *testing.T) {
 	}
 	if got.Steps[0].Argv[3] != "/usr/bin/php8.3" {
 		t.Errorf("argv = %+v", got.Steps[0].Argv)
+	}
+	if got.Repository == nil || got.Repository.Fingerprint != "15058500A0235D97F5D10063B188E2B695BD4743" {
+		t.Errorf("repositório = %+v", got.Repository)
 	}
 }

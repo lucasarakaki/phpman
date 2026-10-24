@@ -11,10 +11,17 @@ import (
 	"github.com/lucasarakaki/phpman/internal/core"
 )
 
+const (
+	suryKeyring    = "/usr/share/keyrings/deb.sury.org-php.gpg"
+	surySourceFile = "/etc/apt/sources.list.d/sury-php.list"
+	suryKeyURL     = "https://packages.sury.org/php/apt.gpg"
+)
+
 var (
 	planVersionRe   = regexp.MustCompile(`^\d+\.\d+$`)
 	phpPackageRe    = regexp.MustCompile(`^(?:php|libphp|libapache2-mod-php)\d+\.\d+(?:-[a-z0-9+.-]+)?$`)
 	phpFPMUnitRe    = regexp.MustCompile(`^php(?:[0-9]+\.[0-9]+)?-fpm\.service$`)
+	surySourceRe    = regexp.MustCompile(`^deb \[signed-by=/usr/share/keyrings/deb\.sury\.org-php\.gpg\] https://packages\.sury\.org/php/ [a-z0-9][a-z0-9-]{0,31} main\n$`)
 	alternativeName = map[string]bool{
 		"php":        true,
 		"phpize":     true,
@@ -26,6 +33,8 @@ var (
 		"apt-get":             {"/usr/bin/apt-get"},
 		"systemctl":           {"/usr/bin/systemctl", "/bin/systemctl"},
 		"update-alternatives": {"/usr/sbin/update-alternatives", "/usr/bin/update-alternatives"},
+		"curl":                {"/usr/bin/curl"},
+		"chmod":               {"/usr/bin/chmod", "/bin/chmod"},
 	}
 )
 
@@ -57,6 +66,10 @@ func validateArgv(argv []string) error {
 		return validateSystemctl(argv)
 	case "update-alternatives":
 		return validateUpdateAlternatives(argv)
+	case "curl":
+		return validateCurl(argv)
+	case "chmod":
+		return validateChmod(argv)
 	default:
 		return fmt.Errorf("comando fora da allowlist: %q", argv[0])
 	}
@@ -75,6 +88,12 @@ func unsafeArg(arg string) bool {
 }
 
 func validateAptGet(argv []string) error {
+	if len(argv) == 2 && argv[1] == "update" {
+		return nil
+	}
+	if isSuryBootstrapInstall(argv) {
+		return nil
+	}
 	if len(argv) < 4 {
 		return fmt.Errorf("apt-get exige subcomando, -y e ao menos um pacote")
 	}
@@ -95,6 +114,50 @@ func validateAptGet(argv []string) error {
 		if !phpPackageRe.MatchString(pkg) {
 			return fmt.Errorf("pacote fora do escopo do phpman: %q", pkg)
 		}
+	}
+	return nil
+}
+
+func isSuryBootstrapInstall(argv []string) bool {
+	want := []string{
+		"apt-get", "install", "-y", "--no-install-recommends",
+		"ca-certificates", "curl", "gnupg",
+	}
+	return sameArgv(argv, want)
+}
+
+func validateCurl(argv []string) error {
+	want := []string{
+		"curl", "--disable", "--fail", "--silent", "--show-error",
+		"--location", "--proto", "=https", "--proto-redir", "=https", "--tlsv1.2",
+		"--connect-timeout", "15", "--max-time", "60",
+		"--output", suryKeyring, suryKeyURL,
+	}
+	if !sameArgv(argv, want) {
+		return fmt.Errorf("curl só pode baixar a chave Sury/ondrej para o keyring fixo")
+	}
+	return nil
+}
+
+func validateChmod(argv []string) error {
+	if len(argv) != 3 || argv[1] != "0644" || argv[2] != suryKeyring {
+		return fmt.Errorf("chmod só pode ajustar o keyring Sury/ondrej para 0644")
+	}
+	return nil
+}
+
+func validateFileWrite(file *core.FileWrite) error {
+	if file == nil {
+		return fmt.Errorf("escrita de arquivo ausente")
+	}
+	if file.Path != surySourceFile {
+		return fmt.Errorf("arquivo fora da allowlist: %q", file.Path)
+	}
+	if file.Mode != 0o644 {
+		return fmt.Errorf("modo de arquivo fora da allowlist: %#o", file.Mode)
+	}
+	if !surySourceRe.MatchString(file.Content) {
+		return fmt.Errorf("conteúdo de repositório inválido para %s", file.Path)
 	}
 	return nil
 }
@@ -215,12 +278,24 @@ func validatePlan(plan *core.Plan) (map[string]core.Step, map[string]core.Step, 
 				return nil, fmt.Errorf("id de passo duplicado: %q", step.ID)
 			}
 			seen[step.ID] = true
-			if len(step.Argv) > 0 {
+			hasCommand := len(step.Argv) > 0
+			hasFile := step.File != nil
+			if hasCommand && hasFile {
+				return nil, fmt.Errorf("passo %q tem comando e escrita de arquivo ao mesmo tempo", step.ID)
+			}
+			if hasCommand || hasFile {
 				if !step.NeedsRoot {
 					return nil, fmt.Errorf("helper só executa passos que exigem root: %q", step.ID)
 				}
-				if err := validateArgv(step.Argv); err != nil {
-					return nil, fmt.Errorf("passo %q: %w", step.ID, err)
+				if hasCommand {
+					if err := validateArgv(step.Argv); err != nil {
+						return nil, fmt.Errorf("passo %q: %w", step.ID, err)
+					}
+				}
+				if hasFile {
+					if err := validateFileWrite(step.File); err != nil {
+						return nil, fmt.Errorf("passo %q: %w", step.ID, err)
+					}
 				}
 			} else if step.Verify == "" {
 				return nil, fmt.Errorf("passo %q não tem comando nem verificação", step.ID)

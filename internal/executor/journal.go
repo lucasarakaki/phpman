@@ -21,7 +21,9 @@ type journalEvent struct {
 	Action  core.Action `json:"action"`
 	Version string      `json:"version"`
 	Step    string      `json:"step"`
-	Argv    []string    `json:"argv"`
+	Argv    []string    `json:"argv,omitempty"`
+	File    string      `json:"file,omitempty"`
+	SHA256  string      `json:"sha256,omitempty"`
 	Exit    *int        `json:"exit,omitempty"`
 	Error   string      `json:"error,omitempty"`
 }

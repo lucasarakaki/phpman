@@ -209,8 +209,8 @@ func (h *Helper) RunRollback(ctx context.Context, step core.Step) error {
 }
 
 func (h *Helper) run(ctx context.Context, step core.Step, op string) error {
-	if len(step.Argv) == 0 {
-		return fmt.Errorf("passo %q não tem comando para executar", step.ID)
+	if len(step.Argv) == 0 && step.File == nil {
+		return fmt.Errorf("passo %q não tem comando nem arquivo para executar", step.ID)
 	}
 	if err := h.send(request{Op: op, ID: step.ID, Argv: step.Argv}); err != nil {
 		return fmt.Errorf("não foi possível enviar o passo %s: %w", step.ID, err)

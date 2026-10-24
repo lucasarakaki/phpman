@@ -2,7 +2,7 @@
 
 ![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
 ![Licença MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green)
-![Status M1.3](https://img.shields.io/badge/status-M1.3%20rollback%20e%20health%20check-blue)
+![Status M1.3b](https://img.shields.io/badge/status-M1.3b%20Sury%2Fondrej%20opt--in-blue)
 
 Inventário e diagnóstico de instalações PHP em distribuições Linux, com uma interface de
 terminal no estilo lazydocker.
@@ -11,13 +11,14 @@ O phpman responde, em um só lugar, perguntas que costumam exigir meia dúzia de
 qual PHP está realmente ativo, qual socket o FPM usa, por que um site quebrou depois de
 uma atualização e por que o `php -v` do terminal não é o mesmo PHP que o nginx executa.
 
-> **Status: M1.3 — rollback e health check.** O phpman detecta o ambiente, aponta
+> **Status: M1.3b — Sury/ondrej opt-in.** O phpman detecta o ambiente, aponta
 > problemas, gera planos e aplica `install`, `remove` e `switch` em Debian/Ubuntu por um
 > helper privilegiado efêmero, com allowlist, verificação passo a passo, journal e
 > rollback automático best-effort em caso de falha. A troca reinicia e valida o FPM da
-> versão alvo. A detecção e o `--dry-run` continuam sem root. Sury/ondrej opt-in e as
-> ações na TUI entram nas próximas fatias. O plano completo está em
-> [docs/ROADMAP.md](docs/ROADMAP.md).
+> versão alvo. Quando a versão não está no catálogo da distribuição, `--third-party`
+> permite planejar o repositório Sury/ondrej com URL, fingerprint e keyring `signed-by`
+> explícitos. A detecção e o `--dry-run` continuam sem root. As ações na TUI entram no
+> M1.4. O plano completo está em [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Sumário
 
@@ -77,12 +78,17 @@ mínimo e rollback automático best-effort.
 - Exporta o plano em JSON (`schema: 1`) para revisão e testes de contrato.
 - Executa com confirmação (`--yes` para automação) por um helper sudo efêmero.
 - Valida cada passo contra o plano em memória e contra uma allowlist: `apt-get`,
-  `systemctl` de unidades PHP-FPM e `update-alternatives` do PHP.
-- Verifica o estado depois de cada passo, incluindo FPM ativo e habilitado no boot.
+  `systemctl` de unidades PHP-FPM, `update-alternatives` do PHP e os comandos fixos de
+  download e ajuste do keyring Sury/ondrej.
+- Verifica o estado depois de cada passo, incluindo FPM ativo e habilitado no boot,
+  conteúdo do source list e fingerprint da chave PGP.
 - Executa o rollback do plano automaticamente, best-effort, quando um passo falha.
 - Reinicia e valida o FPM da versão alvo ao trocar a versão ativa.
-- Registra comandos, códigos de saída e erros em `/var/lib/phpman/journal.jsonl`.
+- Registra comandos, escritas de arquivo, códigos de saída e erros em
+  `/var/lib/phpman/journal.jsonl`.
 - Bloqueia a remoção da versão ativa e avisa sobre vhosts afetados.
+- Oferece Sury/ondrej apenas com `--third-party`, mostrando URL, fingerprint e keyring
+  `signed-by` antes da confirmação.
 
 **Interface**
 
@@ -122,6 +128,7 @@ go install github.com/lucasarakaki/phpman/cmd/phpman@latest
 | `phpman status --json` | inventário completo em JSON |
 | `phpman doctor` | apenas diagnósticos e sugestões |
 | `phpman install 8.3` | instala uma versão, com confirmação e sudo |
+| `phpman install 8.4 --third-party` | permite o repositório Sury/ondrej se a versão não estiver no catálogo |
 | `phpman remove 8.2` | remove uma versão, com confirmação e sudo |
 | `phpman switch 8.3` | troca a versão ativa, com confirmação e sudo |
 | `phpman install 8.3 --dry-run` | simula a instalação de uma versão |
@@ -140,6 +147,7 @@ verificadores e o rollback. `--dry-run` para nesse ponto, sem sudo:
 
 ```bash
 phpman install 8.3 --dry-run
+phpman install 8.4 --third-party --dry-run
 phpman remove 8.2 --dry-run
 phpman switch 8.3 --dry-run
 ```
@@ -171,6 +179,43 @@ ROLLBACK
      apt-get purge -y php8.3-cli php8.3-common php8.3-fpm php8.3-opcache
 ```
 
+### Repositório Sury/ondrej (opt-in)
+
+Quando a versão pedida não aparece no catálogo da distribuição, o phpman não adiciona
+repositórios por conta própria. O plano falha com uma mensagem clara e a opção
+`--third-party` precisa ser passada explicitamente. A flag só se aplica a `install`;
+`remove` e `switch` nunca adicionam repositórios:
+
+```bash
+phpman install 8.4 --third-party --dry-run
+```
+
+O plano mostra, antes de qualquer alteração:
+
+- URL do repositório: `https://packages.sury.org/php/`
+- URL da chave: `https://packages.sury.org/php/apt.gpg`
+- Keyring: `/usr/share/keyrings/deb.sury.org-php.gpg` (`signed-by`)
+- Fingerprint esperado: `15058500A0235D97F5D10063B188E2B695BD4743`
+- Source list: `/etc/apt/sources.list.d/sury-php.list`
+
+Os passos adicionais são fixos e validados pela allowlist do helper:
+
+1. instalar `ca-certificates`, `curl` e `gnupg` com `apt-get`;
+2. baixar a chave por HTTPS com `curl` (sem `.curlrc`, com protocolo restrito a HTTPS);
+3. ajustar o keyring para `0644` e conferir o fingerprint com `gpg`;
+4. escrever o source list com `signed-by` e verificar o conteúdo;
+5. rodar `apt-get update` e só então instalar os pacotes PHP.
+
+O bootstrap usa os índices atuais do apt; em um sistema sem listas, rode
+`sudo apt-get update` antes de iniciar o plano. O `apt-get update` do passo 5 é o que
+atualiza os índices depois de adicionar o repositório Sury/ondrej.
+
+O download da chave e a escrita do source list são operações privilegiadas separadas. O
+helper aceita apenas o caminho, o modo e o formato exatos do repositório Sury/ondrej; não
+existe uma primitiva genérica de escrita de arquivos. O rollback automático remove os
+pacotes PHP instalados, mas **não** remove a configuração do repositório nem a chave; isso
+é documentado no plano e pode ser revertido manualmente.
+
 Sem `--dry-run`, o mesmo plano é exibido e o phpman pede confirmação antes de iniciar o
 helper sudo:
 
@@ -183,16 +228,19 @@ phpman switch 8.3 -y      # alias curto
 O fluxo de execução:
 
 1. O plano é validado e enviado ao helper por JSON Lines em um socket Unix privado.
-2. O helper confere schema, ação, versão, ordem, IDs e `argv` exato de cada passo.
-3. A allowlist aceita apenas `apt-get install/purge` de pacotes PHP versionados,
-   `systemctl enable/disable/start/stop/restart` de unidades `php*-fpm.service` e
-   `update-alternatives --set` de `php`, `phpize`, `php-config`, `phpdbg` e `phar`.
+2. O helper confere schema, ação, versão, ordem, IDs e `argv` exato (ou escrita de
+   arquivo) de cada passo.
+3. A allowlist aceita apenas `apt-get update`, `apt-get install/purge` de pacotes PHP
+   versionados, o conjunto fixo de pacotes de bootstrap do Sury/ondrej, `systemctl`
+   enable/disable/start/stop/restart de unidades `php*-fpm.service`,
+   `update-alternatives --set` do PHP, o `curl` exato da chave Sury/ondrej e o `chmod`
+   exato do keyring.
 4. Cada comando roda sem shell, com ambiente não interativo e timeout.
 5. O executor verifica o estado depois do passo; no primeiro erro obrigatório ele para.
 6. Antes de retornar o erro, o executor executa o rollback do plano na mesma sessão do
    helper, em ordem, continuando mesmo se um passo de rollback falhar.
-7. O helper grava início e fim de cada comando, inclusive rollback, em
-   `/var/lib/phpman/journal.jsonl`.
+7. O helper grava início e fim de cada comando e de cada escrita de arquivo, inclusive
+   rollback, em `/var/lib/phpman/journal.jsonl`.
 
 Para inspecionar o plano em scripts:
 
@@ -211,8 +259,9 @@ As regras atuais:
   best-effort; interrupções por sinal não disparam rollback.
 - `switch` altera `update-alternatives`, reinicia o FPM da versão alvo e valida a unidade
   e o socket. Vhosts que apontam para o socket de outra versão ainda não são reescritos.
-- Repositórios de terceiros são apenas sinalizados nesta etapa; a inclusão de sury/ondrej
-  com confirmação explícita entra numa fatia seguinte.
+- Repositórios de terceiros nunca são adicionados implicitamente. `--third-party` é
+  obrigatório, o plano exibe URL, fingerprint e keyring `signed-by`, e a confirmação
+  menciona o repositório Sury/ondrej.
 
 ## Interface
 
@@ -250,7 +299,7 @@ Teclas:
 | `?` | abrir a ajuda |
 | `q` / `ctrl+c` | sair |
 
-A TUI continua somente leitura no M1.3; as ações de escrita pela interface entram no M1.4.
+A TUI continua somente leitura no M1.3b; as ações de escrita pela interface entram no M1.4.
 
 ## Saída JSON
 
@@ -338,12 +387,17 @@ catálogo de pacotes e o planejamento dependem do provider da família.
 - O helper valida o plano em memória, a ordem dos passos e o `argv` exato antes de executar.
 - O protocolo usa um socket Unix 0600 em diretório 0700 do usuário; o cliente confere que
   o peer é root e o helper confere que o peer é o usuário que invocou o sudo.
-- A allowlist restringe binários, pacotes, unidades systemd e alternatives do PHP.
+- A allowlist restringe binários, pacotes, unidades systemd, alternatives do PHP e os
+  comandos fixos de download e ajuste do keyring Sury/ondrej.
+- A escrita do source list é uma operação específica, com caminho, modo e conteúdo
+  validados de forma independente pelo helper; não existe escrita arbitrária de arquivos.
+- O fingerprint da chave Sury/ondrej é conferido com `gpg` antes do `apt-get update`.
 - Nenhum comando é montado por concatenação de string e nenhum shell (`sh`/`bash`) é aceito.
 - O binário que o sudo executa precisa ser root-owned e não gravável por outros usuários.
 - O sudo lê a senha diretamente do terminal; o phpman nunca vê, grava ou registra a senha.
 - Timeout e cancelamento em toda execução externa.
-- O journal é escrito somente pelo helper, em `/var/lib/phpman/journal.jsonl`.
+- O journal é escrito somente pelo helper, em `/var/lib/phpman/journal.jsonl`, com hash
+  SHA-256 das escritas de arquivo em vez do conteúdo bruto.
 - `NO_COLOR=1` desativa cores na saída de texto.
 
 ## Arquitetura
@@ -408,9 +462,9 @@ systemd, o E2E completo com systemd e a matriz de containers entram no M1.5.
 | **M0** (concluído) | detecção, TUI somente leitura, `status --json`, `doctor` |
 | **M1.1** (concluído) | planos apt de instalar/remover/trocar, `--dry-run` e JSON |
 | **M1.2** (concluído) | executor, helper sudo, allowlist, journal e confirmação |
-| **M1.3** (atual) | rollback automático, health check e restart de FPM no switch |
-| M1.3b | sury/ondrej opt-in com confirmação explícita |
-| M1.4 | ações na TUI |
+| **M1.3** (concluído) | rollback automático, health check e restart de FPM no switch |
+| **M1.3b** (concluído) | Sury/ondrej opt-in com confirmação explícita, fingerprint e keyring |
+| M1.4 (próximo) | ações na TUI |
 | M1.5 | containers Debian/Ubuntu e release |
 | M2 | extensões por versão e suporte a Fedora/RHEL via Remi |
 | M3 | Alpine/openSUSE, integração transacional com nginx/Apache |
