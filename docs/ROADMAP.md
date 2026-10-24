@@ -92,11 +92,12 @@ Limitações desta fatia:
 - `switch` só altera `update-alternatives`; não reinicia FPM nem reescreve vhosts
   (restart de FPM concluído no M1.3; vhosts ficam para o M3).
 - A TUI continua somente leitura (M1.4).
-- Sury/ondrej continua apenas sinalizado; a inclusão opt-in entra no M1.3b.
+- Sury/ondrej continua apenas sinalizado; a inclusão opt-in entra no M1.3b
+  (concluído).
 - O helper é aberto por comando. Reutilizar uma sessão no TUI será decidido no M1.4.
 - O teste de execução real em container com systemd entra no M1.5.
 
-### M1.3 — rollback, health check e switch seguro (em andamento)
+### M1.3 — rollback, health check e switch seguro (concluído)
 
 - [x] Protocolo do helper aceita uma fase `rollback` separada, com ordem e `argv` validados
   contra o plano em memória.
@@ -109,11 +110,26 @@ Limitações desta fatia:
 - [x] `switch` reinicia o FPM da versão alvo, valida a unidade e o socket e para o FPM no
   rollback quando ele foi iniciado pelo plano.
 - [x] Testes de rollback, ordem de fases, `unit-enabled` e restart de FPM no switch.
-- [ ] Sury/ondrej opt-in com confirmação explícita, URL, fingerprint e keyring
-  (`signed-by`), em fatia separada (M1.3b).
-- [ ] Rollback de configuração de repositório e arquivos removidos por `purge` continua
-  best-effort e não transacional.
+- [x] Sury/ondrej opt-in com confirmação explícita, URL, fingerprint e keyring
+  (`signed-by`), implementado no M1.3b.
+- [x] Rollback de configuração de repositório e arquivos removidos por `purge` permanece
+  best-effort e não transacional; o plano avisa que source list e chave não são removidos.
 - [ ] Vhosts não são reescritos; isso fica no M3.
+
+### M1.3b — Sury/ondrej opt-in (concluído)
+
+- [x] Flag `--third-party` explícita; sem ela, versão ausente continua sendo erro.
+- [x] Metadados `Repository` no plano: nome, URL, URL da chave, keyring, source list e
+  fingerprint.
+- [x] Plano mostra os metadados antes da confirmação; o prompt menciona o repositório.
+- [x] Bootstrap fixo (`ca-certificates`, `curl`, `gnupg`), download HTTPS da chave,
+  `chmod` do keyring e verificação do fingerprint com `gpg`.
+- [x] Source list com `signed-by`, escrito por uma operação específica de arquivo, com
+  caminho, modo e conteúdo validados pela allowlist do helper.
+- [x] `apt-get update` após adicionar o repositório e health check normal de instalação.
+- [x] Journal registra escritas de arquivo com caminho e SHA-256, sem conteúdo bruto.
+- [x] Testes de provider, allowlist, helper, escrita atômica, verificadores e relatório.
+- [x] Documentação do comportamento não transacional do rollback do repositório.
 
 ### Provider
 
@@ -134,32 +150,48 @@ quando o segundo provider entrar.
 
 ```go
 type Plan struct {
-    Schema   int
-    Action   Action
-    Version  string
-    Summary  string
-    NeedsRoot bool
-    Warnings []string
-    Steps    []Step
-    Rollback []Step
+    Schema     int
+    Action     Action
+    Version    string
+    Summary    string
+    NeedsRoot  bool
+    Repository *Repository // opcional, Sury/ondrej opt-in
+    Warnings   []string
+    Steps      []Step
+    Rollback   []Step
+}
+
+type Repository struct {
+    Name, URL, KeyURL string
+    Keyring, SourceFile, Fingerprint string
 }
 
 type Step struct {
     ID, Description string
-    Argv            []string // vazio = verificação interna
+    Argv            []string   // vazio quando o passo só grava arquivo ou verifica
+    File            *FileWrite // escrita específica, validada pela allowlist
     NeedsRoot       bool
     Verify          VerifyKind // verificador declarativo
     VerifyArgs      []string
     Optional        bool
+}
+
+type FileWrite struct {
+    Path, Content string
+    Mode          uint32
 }
 ```
 
 Regras:
 
 - `Plan` é serializável, sem funções nem timestamps, e idempotente na geração.
-- `VerifyKind` é um enum de dados (`binary-version`, `unit-active`, `alternative-current`
-  etc.); o executor traduz cada valor para a verificação concreta.
-- O executor só aceita `argv`; verifica o passo anterior antes do próximo.
+- `VerifyKind` é um enum de dados (`binary-version`, `unit-active`, `alternative-current`,
+  `file-content`, `pgp-key` etc.); o executor traduz cada valor para a verificação
+  concreta.
+- O executor aceita `argv` ou uma escrita de arquivo específica; verifica o passo anterior
+  antes do próximo.
+- A escrita de arquivo não é genérica: o helper valida caminho, modo e formato do source
+  list Sury/ondrej. `curl` e `chmod` também têm `argv` exato na allowlist.
 - `--dry-run` imprime o plano e não pede sudo; sem ele, há confirmação e `--yes` pula a
   pergunta.
 - Falha no meio grava o journal, para a execução e dispara o rollback automático
@@ -167,13 +199,26 @@ Regras:
 
 ### Fluxo de instalação
 
-1. Pré-flight: lock do apt, espaço em disco, `dpkg --audit`, pacotes quebrados.
-2. Se a versão não estiver no repositório padrão, oferecer sury/ondrej **com confirmação
-   explícita**, mostrando URL, fingerprint e arquivo de keyring (`signed-by`).
-3. `apt-get update` somente se o repositório mudou.
+1. Snapshot e plano sem root. O plano é validado e exibido antes de qualquer alteração.
+2. Se a versão não estiver no catálogo, sem `--third-party` o comando falha com uma
+   mensagem clara. Com a flag, o plano inclui os metadados do Sury/ondrej e os passos de
+   preparação do repositório.
+3. Preparação do repositório, somente no caminho opt-in:
+   - `apt-get install -y --no-install-recommends ca-certificates curl gnupg`;
+   - download HTTPS da chave para `/usr/share/keyrings/deb.sury.org-php.gpg`;
+   - `chmod 0644` do keyring e verificação do fingerprint
+     `15058500A0235D97F5D10063B188E2B695BD4743` com `gpg`;
+   - escrita atômica de `/etc/apt/sources.list.d/sury-php.list` com `signed-by`, validada
+     pela allowlist do helper;
+   - `apt-get update`.
 4. `apt-get install -y --no-install-recommends php8.3-{cli,common,fpm,opcache}` + extras.
 5. Health check: `php8.3 -v`, unidade FPM `enabled`, socket presente.
 6. Só então oferecer tornar a versão ativa.
+7. O rollback automático remove os pacotes PHP instalados, mas não remove o source list
+   nem a chave do repositório; o plano avisa e a limpeza é manual.
+8. O bootstrap usa os índices atuais do apt; em um sistema sem listas, é necessário
+   rodar `apt-get update` antes do plano. O update do passo 3 é o que reflete o novo
+   repositório.
 
 ### Troca de versão
 
@@ -209,8 +254,9 @@ com arquivo 0600; `SO_PEERCRED` confirma root no cliente e o `SUDO_UID` no helpe
 Mensagens do cliente:
 
 ```json
-{"op":"plan","plan":{"schema":1,"action":"install","version":"8.3","steps":[...],"rollback":[...]}}
+{"op":"plan","plan":{"schema":1,"action":"install","version":"8.3","repository":{...},"steps":[...],"rollback":[...]}}
 {"op":"exec","id":"install-packages","argv":["apt-get","install","-y","php8.3-fpm"]}
+{"op":"exec","id":"write-sury-source"}
 {"op":"rollback","id":"rollback-remove-packages","argv":["apt-get","purge","-y","php8.3-fpm"]}
 {"op":"done"}
 ```
@@ -230,15 +276,21 @@ Regras de segurança implementadas:
 - Senha lida pelo sudo, nunca logada, nunca em argv, nunca em arquivo.
 - Helper recusa `sh`, `bash`, redirecionamentos e binários fora da allowlist.
 - Cada `exec` ou `rollback` referencia um passo do plano recebido em memória; o helper
-  valida schema, ação, versão, ID, ordem, fase, `argv` exato e `needs_root`.
+  valida schema, ação, versão, ID, ordem, fase, `argv` exato (ou escrita de arquivo),
+  `needs_root` e a allowlist.
 - Binários são resolvidos por caminhos absolutos confiáveis, nunca por `PATH`.
 - O JSON Lines não passa pelo stdin/stdout do sudo: usa um socket Unix privado, o que
   evita echo/tradução de bytes quando o sudo habilita `use_pty`.
-- Allowlist: `apt-get install/purge -y` de pacotes PHP versionados; `systemctl`
+- Allowlist: `apt-get update`; `apt-get install/purge -y` de pacotes PHP versionados; o
+  conjunto fixo `ca-certificates`, `curl`, `gnupg`; `systemctl`
   enable/disable/start/stop/restart de `php*-fpm.service`; `update-alternatives --set`
-  de `php`, `phpize`, `php-config`, `phpdbg` e `phar`.
+  de `php`, `phpize`, `php-config`, `phpdbg` e `phar`; `curl` exato da chave Sury/ondrej
+  e `chmod 0644` do keyring fixo.
+- Escrita de arquivo: apenas `/etc/apt/sources.list.d/sury-php.list`, modo `0644`, com
+  `signed-by` e codename validados; a escrita é atômica e recusa symlink ou diretório
+  gravável por grupo/outros.
 - Journal em `/var/lib/phpman/journal.jsonl`, escrito apenas pelo helper, com `start` e
-  `finish`, código de saída e erro.
+  `finish`, código de saída, erro, caminho de arquivo e SHA-256 do conteúdo escrito.
 - O executável do helper precisa ser root-owned, não gravável por grupo/outros e estar em
   diretório root-owned; `./bin/phpman` e `go run` são recusados para execução.
 - O helper encerra no `done` ou no EOF do cliente; não há sudo persistente.
