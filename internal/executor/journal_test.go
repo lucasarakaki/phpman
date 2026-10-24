@@ -56,6 +56,41 @@ func TestJournalWritesJSONLines(t *testing.T) {
 	}
 }
 
+func TestJournalFileMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	j, err := newJournal(path)
+	if err != nil {
+		t.Fatalf("newJournal: %v", err)
+	}
+	code := 0
+	if err := j.write(journalEvent{
+		Phase:   "finish",
+		Action:  core.ActionInstall,
+		Version: "8.4",
+		Step:    "write-sury-source",
+		File:    "/etc/apt/sources.list.d/sury-php.list",
+		SHA256:  "abc123",
+		Exit:    &code,
+	}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ev journalEvent
+	if err := json.Unmarshal(data, &ev); err != nil {
+		t.Fatalf("journal inválido: %v", err)
+	}
+	if ev.File != "/etc/apt/sources.list.d/sury-php.list" || ev.SHA256 != "abc123" {
+		t.Errorf("metadados de arquivo = %+v", ev)
+	}
+	if ev.Argv != nil {
+		t.Errorf("passo de arquivo não deveria ter argv: %+v", ev.Argv)
+	}
+}
+
 func TestJournalRejectsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")

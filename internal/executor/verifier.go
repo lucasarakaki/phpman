@@ -166,9 +166,57 @@ func (v SystemVerifier) Verify(ctx context.Context, step core.Step) error {
 			return fmt.Errorf("alternative %s aponta para %q, esperado %q", step.VerifyArgs[0], alt.Current, step.VerifyArgs[1])
 		}
 		return nil
+
+	case core.VerifyFileContent:
+		if step.File == nil {
+			return fmt.Errorf("verificação %s exige o conteúdo esperado do passo", step.Verify)
+		}
+		data, err := os.ReadFile(step.File.Path)
+		if err != nil {
+			return fmt.Errorf("não foi possível ler %s: %w", step.File.Path, err)
+		}
+		if string(data) != step.File.Content {
+			return fmt.Errorf("conteúdo de %s não confere com o plano", step.File.Path)
+		}
+		return nil
+
+	case core.VerifyPGPKey:
+		if len(step.VerifyArgs) != 2 {
+			return fmt.Errorf("verificação %s exige caminho e fingerprint", step.Verify)
+		}
+		return verifyPGPKey(ctx, runner, step.VerifyArgs[0], step.VerifyArgs[1])
 	}
 
 	return fmt.Errorf("verificação desconhecida: %s", step.Verify)
+}
+
+func verifyPGPKey(ctx context.Context, runner OutputRunner, path, expected string) error {
+	home, err := os.MkdirTemp("", "phpman-gpg-")
+	if err != nil {
+		return fmt.Errorf("não foi possível criar diretório temporário para o gpg: %w", err)
+	}
+	defer os.RemoveAll(home)
+	_ = os.Chmod(home, 0o700)
+
+	out, err := runner.Run(ctx, []string{
+		"/usr/bin/gpg", "--homedir", home, "--batch", "--no-tty", "--no-options",
+		"--with-colons", "--with-fingerprint", "--show-keys", path,
+	})
+	if err != nil {
+		return fmt.Errorf("não foi possível inspecionar a chave %s: %w (%s)", path, err, strings.TrimSpace(out))
+	}
+	want := normalizeFingerprint(expected)
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) > 9 && fields[0] == "fpr" && normalizeFingerprint(fields[9]) == want {
+			return nil
+		}
+	}
+	return fmt.Errorf("fingerprint da chave %s não confere; esperado %s", path, expected)
+}
+
+func normalizeFingerprint(value string) string {
+	return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(value), " ", ""))
 }
 
 func parseRawVersion(raw string) (int, int, error) {

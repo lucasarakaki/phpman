@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,6 +20,12 @@ type fakeOutput struct {
 func (f fakeOutput) Run(_ context.Context, argv []string) (string, error) {
 	key := strings.Join(argv, " ")
 	return f.outputs[key], f.errs[key]
+}
+
+type fakeOutputFunc func(context.Context, []string) (string, error)
+
+func (f fakeOutputFunc) Run(ctx context.Context, argv []string) (string, error) {
+	return f(ctx, argv)
 }
 
 func TestSystemVerifierPackages(t *testing.T) {
@@ -167,6 +175,55 @@ func TestSystemVerifierSocket(t *testing.T) {
 		VerifyArgs: []string{path + ".missing"},
 	}); err == nil {
 		t.Error("socket ausente foi aceito")
+	}
+}
+
+func TestSystemVerifierFileContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sury.list")
+	content := "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ bookworm main\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v := SystemVerifier{}
+	step := core.Step{
+		File:   &core.FileWrite{Path: path, Content: content, Mode: 0o644},
+		Verify: core.VerifyFileContent,
+	}
+	if err := v.Verify(context.Background(), step); err != nil {
+		t.Fatalf("conteúdo correto: %v", err)
+	}
+	step.File.Content = content + "extra\n"
+	if err := v.Verify(context.Background(), step); err == nil {
+		t.Error("conteúdo divergente foi aceito")
+	}
+	if err := v.Verify(context.Background(), core.Step{Verify: core.VerifyFileContent}); err == nil {
+		t.Error("verificação sem arquivo foi aceita")
+	}
+}
+
+func TestSystemVerifierPGPKey(t *testing.T) {
+	var gotArgv []string
+	runner := fakeOutputFunc(func(_ context.Context, argv []string) (string, error) {
+		gotArgv = argv
+		return "pub:u:3072:1:ABC:0:0:::::::\nfpr:::::::::15058500A0235D97F5D10063B188E2B695BD4743:\n", nil
+	})
+	v := SystemVerifier{Runner: runner}
+	step := core.Step{
+		Verify:     core.VerifyPGPKey,
+		VerifyArgs: []string{suryKeyring, "15058500A0235D97F5D10063B188E2B695BD4743"},
+	}
+	if err := v.Verify(context.Background(), step); err != nil {
+		t.Fatalf("fingerprint correto: %v", err)
+	}
+	if len(gotArgv) < 2 || gotArgv[0] != "/usr/bin/gpg" || gotArgv[1] != "--homedir" {
+		t.Errorf("argv do gpg = %#v", gotArgv)
+	}
+	step.VerifyArgs[1] = "0000000000000000000000000000000000000000"
+	if err := v.Verify(context.Background(), step); err == nil {
+		t.Error("fingerprint divergente foi aceito")
+	}
+	if err := v.Verify(context.Background(), core.Step{Verify: core.VerifyPGPKey, VerifyArgs: []string{suryKeyring}}); err == nil {
+		t.Error("verificação sem fingerprint foi aceita")
 	}
 }
 
