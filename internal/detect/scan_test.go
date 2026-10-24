@@ -192,6 +192,12 @@ func TestCapabilities(t *testing.T) {
 	if !capSupported(debian, "catalog") {
 		t.Error("catálogo deveria ser suportado no Debian com apt-cache")
 	}
+	if !capSupported(debian, "third-party") {
+		t.Error("sury/ondrej opt-in deveria ser suportado no Debian")
+	}
+	if capSupported(fedora, "third-party") {
+		t.Error("sury/ondrej não deveria ser suportado no Fedora")
+	}
 	if capSupported(fedora, "catalog") {
 		t.Error("catálogo não deveria ser suportado no Fedora")
 	}

@@ -397,11 +397,11 @@ func Capabilities(d core.Distro, catalogAvailable bool) []core.Capability {
 		{Key: "doctor", Label: "Diagnóstico do ambiente PHP", Supported: true, Detail: "avisos acionáveis", Phase: "M0"},
 		{Key: "plan", Label: "Simular instalação, remoção e troca", Supported: apt, Detail: "planos --dry-run, sem root", Phase: "M1"},
 		{Key: "catalog", Label: "Catálogo de versões disponíveis", Supported: catalog, Detail: "consulta apt-cache", Phase: "M0"},
-		{Key: "install", Label: "Instalar versões", Supported: false, Detail: "planejado", Phase: "M1"},
-		{Key: "remove", Label: "Remover versões", Supported: false, Detail: "planejado", Phase: "M1"},
-		{Key: "switch", Label: "Trocar a versão ativa", Supported: false, Detail: "planejado", Phase: "M1"},
+		{Key: "install", Label: "Instalar versões", Supported: apt, Detail: "helper sudo, confirmação e rollback", Phase: "M1.2"},
+		{Key: "remove", Label: "Remover versões", Supported: apt, Detail: "helper sudo, confirmação e rollback", Phase: "M1.2"},
+		{Key: "switch", Label: "Trocar a versão ativa", Supported: apt, Detail: "update-alternatives e restart do FPM", Phase: "M1.3"},
 		{Key: "extensions", Label: "Gerenciar extensões", Supported: false, Detail: "planejado", Phase: "M2"},
-		{Key: "third-party", Label: "Adicionar repositórios de terceiros", Supported: false, Detail: "sury/ondrej com confirmação explícita", Phase: "M1"},
+		{Key: "third-party", Label: "Adicionar repositórios de terceiros", Supported: apt, Detail: "Sury/ondrej opt-in com --third-party", Phase: "M1.3b"},
 		{Key: "project-pin", Label: "Fixar versão por projeto", Supported: false, Detail: "fora do MVP", Phase: "—"},
 	}
 	for i := range caps {

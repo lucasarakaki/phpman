@@ -87,6 +87,94 @@ func TestPlanInstallUnavailable(t *testing.T) {
 	}
 }
 
+func TestPlanInstallThirdParty(t *testing.T) {
+	plan, err := New().PlanInstall(testSnapshot(), "8.4", provider.Options{WithFPM: true, AllowThirdParty: true})
+	if err != nil {
+		t.Fatalf("PlanInstall: %v", err)
+	}
+	if plan.Repository == nil {
+		t.Fatal("plano sem metadados do repositório")
+	}
+	repo := plan.Repository
+	if repo.Name != "Sury/ondrej" || repo.URL != "https://packages.sury.org/php/" {
+		t.Errorf("repositório = %+v", repo)
+	}
+	if repo.KeyURL != "https://packages.sury.org/php/apt.gpg" {
+		t.Errorf("URL da chave = %q", repo.KeyURL)
+	}
+	if repo.Keyring != "/usr/share/keyrings/deb.sury.org-php.gpg" || repo.SourceFile != "/etc/apt/sources.list.d/sury-php.list" {
+		t.Errorf("keyring/arquivo = %+v", repo)
+	}
+	if repo.Fingerprint != "15058500A0235D97F5D10063B188E2B695BD4743" {
+		t.Errorf("fingerprint = %q", repo.Fingerprint)
+	}
+
+	if len(plan.Steps) != 10 {
+		t.Fatalf("passos = %d: %+v", len(plan.Steps), plan.Steps)
+	}
+	wantIDs := []string{
+		"install-bootstrap", "download-sury-key", "chmod-sury-key",
+		"write-sury-source", "apt-update-sury", "install-packages",
+		"enable-fpm", "verify-fpm-enabled", "verify-binary", "verify-socket",
+	}
+	for i, want := range wantIDs {
+		if plan.Steps[i].ID != want {
+			t.Errorf("passo %d = %q, esperado %q", i, plan.Steps[i].ID, want)
+		}
+	}
+	if got := strings.Join(plan.Steps[0].Argv, " "); got != "apt-get install -y --no-install-recommends ca-certificates curl gnupg" {
+		t.Errorf("bootstrap = %q", got)
+	}
+	if got := strings.Join(plan.Steps[1].Argv, " "); !strings.Contains(got, "https://packages.sury.org/php/apt.gpg") {
+		t.Errorf("download = %q", got)
+	}
+	if plan.Steps[2].Verify != core.VerifyPGPKey {
+		t.Errorf("verificação da chave = %+v", plan.Steps[2])
+	}
+	file := plan.Steps[3].File
+	if file == nil {
+		t.Fatal("passo de arquivo ausente")
+	}
+	wantSource := "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ bookworm main\n"
+	if file.Path != "/etc/apt/sources.list.d/sury-php.list" || file.Content != wantSource || file.Mode != 0o644 {
+		t.Errorf("arquivo = %+v", file)
+	}
+	if plan.Steps[3].Verify != core.VerifyFileContent {
+		t.Errorf("verificação do arquivo = %+v", plan.Steps[3])
+	}
+	if plan.Steps[4].Argv[1] != "update" {
+		t.Errorf("apt update = %+v", plan.Steps[4])
+	}
+	if !hasWarning(plan.Warnings, "Sury/ondrej") || !hasWarning(plan.Warnings, "não são removidas automaticamente") {
+		t.Errorf("avisos = %+v", plan.Warnings)
+	}
+	if len(plan.Rollback) != 2 {
+		t.Errorf("rollback = %+v", plan.Rollback)
+	}
+}
+
+func TestPlanInstallThirdPartyRequiresCodename(t *testing.T) {
+	snap := testSnapshot()
+	snap.Distro.Codename = ""
+	_, err := New().PlanInstall(snap, "8.4", provider.Options{WithFPM: true, AllowThirdParty: true})
+	if !errors.Is(err, provider.ErrThirdPartyUnsupported) {
+		t.Fatalf("err = %v, esperado ErrThirdPartyUnsupported", err)
+	}
+}
+
+func TestPlanInstallThirdPartyNotNeeded(t *testing.T) {
+	plan, err := New().PlanInstall(testSnapshot(), "8.3", provider.Options{WithFPM: true, AllowThirdParty: true})
+	if err != nil {
+		t.Fatalf("PlanInstall: %v", err)
+	}
+	if plan.Repository != nil {
+		t.Errorf("repositório não deveria ser adicionado: %+v", plan.Repository)
+	}
+	if !hasWarning(plan.Warnings, "não será adicionado") {
+		t.Errorf("faltou aviso de repositório não necessário: %+v", plan.Warnings)
+	}
+}
+
 func TestPlanInstallWarnsThirdParty(t *testing.T) {
 	snap := testSnapshot()
 	snap.Available[0].Origin = "terceiros"
@@ -339,7 +427,7 @@ func hasWarning(warnings []string, fragment string) bool {
 func testSnapshot() *core.Snapshot {
 	return &core.Snapshot{
 		Schema:        core.Schema,
-		Distro:        core.Distro{ID: "debian", Family: core.FamilyDebian, PackageManager: "apt"},
+		Distro:        core.Distro{ID: "debian", Family: core.FamilyDebian, Codename: "bookworm", PackageManager: "apt"},
 		ActiveVersion: "8.2",
 		PathVersion:   "8.2",
 		PathBinary:    "/usr/bin/php8.2",

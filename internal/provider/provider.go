@@ -10,7 +10,8 @@ import (
 
 // Options controls which components a plan includes.
 type Options struct {
-	WithFPM bool
+	WithFPM         bool
+	AllowThirdParty bool
 }
 
 // DefaultOptions returns the MVP defaults: CLI and FPM.
@@ -28,10 +29,11 @@ type Provider interface {
 // Plan errors. They are sentinels so the CLI can distinguish invalid requests
 // from unexpected failures and choose the right exit code.
 var (
-	ErrUnsupportedDistro   = errors.New("distribuição sem suporte a planos de escrita")
-	ErrInvalidVersion      = errors.New("versão inválida; use o formato X.Y")
-	ErrVersionNotInstalled = errors.New("versão de PHP não instalada")
-	ErrVersionUnavailable  = errors.New("versão indisponível no repositório configurado")
-	ErrActiveVersion       = errors.New("não é possível remover a versão ativa")
-	ErrNoPackages          = errors.New("não foi possível identificar os pacotes da versão")
+	ErrUnsupportedDistro     = errors.New("distribuição sem suporte a planos de escrita")
+	ErrInvalidVersion        = errors.New("versão inválida; use o formato X.Y")
+	ErrVersionNotInstalled   = errors.New("versão de PHP não instalada")
+	ErrVersionUnavailable    = errors.New("versão indisponível no repositório configurado")
+	ErrActiveVersion         = errors.New("não é possível remover a versão ativa")
+	ErrNoPackages            = errors.New("não foi possível identificar os pacotes da versão")
+	ErrThirdPartyUnsupported = errors.New("repositório de terceiros indisponível para esta distribuição")
 )
