@@ -26,14 +26,39 @@ const (
 	VerifyUnitEnabled        VerifyKind = "unit-enabled"
 	VerifySocketExists       VerifyKind = "socket-exists"
 	VerifyAlternativeCurrent VerifyKind = "alternative-current"
+	VerifyFileContent        VerifyKind = "file-content"
+	VerifyPGPKey             VerifyKind = "pgp-key"
 )
 
+// FileWrite describes a single file that the privileged helper may create or
+// replace. It is deliberately limited to exact allowlisted paths and contents
+// by the executor; it is not a generic file-writing primitive.
+type FileWrite struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Mode    uint32 `json:"mode"`
+}
+
+// Repository describes an opt-in third-party package source. The plan includes
+// this metadata so the CLI can show the URL, keyring and fingerprint before the
+// user confirms.
+type Repository struct {
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	KeyURL      string `json:"key_url"`
+	Keyring     string `json:"keyring"`
+	SourceFile  string `json:"source_file"`
+	Fingerprint string `json:"fingerprint"`
+}
+
 // Step is one planned action. Argv is already split and is never passed through
-// a shell. Verification-only steps have an empty Argv and a Verify kind.
+// a shell. A step may carry a command, a file write, or only a verification;
+// commands and file writes are mutually exclusive.
 type Step struct {
 	ID          string     `json:"id"`
 	Description string     `json:"description"`
 	Argv        []string   `json:"argv,omitempty"`
+	File        *FileWrite `json:"file,omitempty"`
 	NeedsRoot   bool       `json:"needs_root"`
 	Verify      VerifyKind `json:"verify,omitempty"`
 	VerifyArgs  []string   `json:"verify_args,omitempty"`
@@ -44,14 +69,15 @@ type Step struct {
 // contains timestamps or other volatile data, so equal inputs produce equal
 // plans.
 type Plan struct {
-	Schema    int      `json:"schema"`
-	Action    Action   `json:"action"`
-	Version   string   `json:"version"`
-	Summary   string   `json:"summary"`
-	NeedsRoot bool     `json:"needs_root"`
-	Warnings  []string `json:"warnings,omitempty"`
-	Steps     []Step   `json:"steps"`
-	Rollback  []Step   `json:"rollback,omitempty"`
+	Schema     int         `json:"schema"`
+	Action     Action      `json:"action"`
+	Version    string      `json:"version"`
+	Summary    string      `json:"summary"`
+	NeedsRoot  bool        `json:"needs_root"`
+	Repository *Repository `json:"repository,omitempty"`
+	Warnings   []string    `json:"warnings,omitempty"`
+	Steps      []Step      `json:"steps"`
+	Rollback   []Step      `json:"rollback,omitempty"`
 }
 
 // NeedsPrivilege reports whether any step or rollback step requires root.
