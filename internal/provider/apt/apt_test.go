@@ -23,7 +23,7 @@ func TestPlanInstall(t *testing.T) {
 	if !plan.NeedsRoot {
 		t.Error("instalação deveria requerer root")
 	}
-	if len(plan.Steps) != 4 {
+	if len(plan.Steps) != 5 {
 		t.Fatalf("passos = %+v", plan.Steps)
 	}
 
@@ -37,8 +37,11 @@ func TestPlanInstall(t *testing.T) {
 	if plan.Steps[1].Argv[0] != "systemctl" || plan.Steps[1].Argv[3] != "php8.3-fpm.service" {
 		t.Errorf("passo do FPM = %+v", plan.Steps[1])
 	}
-	if plan.Steps[2].Verify != core.VerifyBinaryVersion {
-		t.Errorf("verificação do binário = %+v", plan.Steps[2])
+	if plan.Steps[2].Verify != core.VerifyUnitEnabled {
+		t.Errorf("verificação de FPM habilitado = %+v", plan.Steps[2])
+	}
+	if plan.Steps[3].Verify != core.VerifyBinaryVersion {
+		t.Errorf("verificação do binário = %+v", plan.Steps[3])
 	}
 	if len(plan.Rollback) != 2 {
 		t.Errorf("rollback = %+v", plan.Rollback)
@@ -173,8 +176,54 @@ func TestPlanSwitch(t *testing.T) {
 	if len(plan.Rollback) != 5 {
 		t.Errorf("rollback = %+v", plan.Rollback)
 	}
-	if !hasWarning(plan.Warnings, "não são reiniciados ou reescritos") {
-		t.Errorf("faltou aviso sobre serviços: %+v", plan.Warnings)
+	if !hasWarning(plan.Warnings, "Vhosts não são reescritos") {
+		t.Errorf("faltou aviso sobre vhosts: %+v", plan.Warnings)
+	}
+}
+
+func TestPlanSwitchRestartsTargetFPM(t *testing.T) {
+	snap := testSnapshot()
+	snap.Versions = append(snap.Versions, core.Version{
+		Raw:   "8.3",
+		Major: 8,
+		Minor: 3,
+		SAPIs: []core.SAPI{{
+			Kind:   core.SAPIFPM,
+			Unit:   "php8.3-fpm.service",
+			Socket: "/run/php/php8.3-fpm.sock",
+		}},
+	})
+	snap.Services = []core.Service{{
+		Unit:   "php8.3-fpm.service",
+		Active: false,
+	}}
+
+	plan, err := New().PlanSwitch(snap, "8.3")
+	if err != nil {
+		t.Fatalf("PlanSwitch: %v", err)
+	}
+	if len(plan.Steps) != 8 {
+		t.Fatalf("passos = %+v", plan.Steps)
+	}
+	restart := plan.Steps[6]
+	if !reflect.DeepEqual(restart.Argv, []string{"systemctl", "restart", "php8.3-fpm.service"}) {
+		t.Errorf("passo de restart = %+v", restart)
+	}
+	if restart.Verify != core.VerifyUnitActive {
+		t.Errorf("verificação do restart = %+v", restart)
+	}
+	if plan.Steps[7].Verify != core.VerifySocketExists || !plan.Steps[7].Optional {
+		t.Errorf("verificação de socket = %+v", plan.Steps[7])
+	}
+	if len(plan.Rollback) != 6 {
+		t.Fatalf("rollback = %+v", plan.Rollback)
+	}
+	stop := plan.Rollback[5]
+	if !reflect.DeepEqual(stop.Argv, []string{"systemctl", "stop", "php8.3-fpm.service"}) {
+		t.Errorf("rollback de FPM = %+v", stop)
+	}
+	if !hasWarning(plan.Warnings, "será reiniciado") {
+		t.Errorf("faltou aviso de restart: %+v", plan.Warnings)
 	}
 }
 

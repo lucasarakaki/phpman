@@ -13,8 +13,7 @@ não devem ser revertidas sem discussão.
    root, por ação, com comandos em allowlist.
 4. **Nunca `sh -c`.** Comandos são `argv`; nada de interpolação de string.
 5. **Toda ação é verificável e reversível na medida do possível.** Health check depois,
-   journal antes, rollback best-effort quando falhar no meio (execução automática no
-   M1.3).
+   journal antes e rollback automático best-effort quando falhar no meio.
 6. **Determinismo nos testes.** Parsers são testados com fixtures; integração roda em
    containers, não na máquina do desenvolvedor.
 
@@ -88,12 +87,33 @@ Limitações desta fatia:
 
 Limitações desta fatia:
 
-- O rollback é exibido e validado, mas ainda não é executado automaticamente (M1.3).
-- `switch` só altera `update-alternatives`; não reinicia FPM nem reescreve vhosts.
+- O rollback é exibido e validado, mas ainda não é executado automaticamente (concluído no
+  M1.3).
+- `switch` só altera `update-alternatives`; não reinicia FPM nem reescreve vhosts
+  (restart de FPM concluído no M1.3; vhosts ficam para o M3).
 - A TUI continua somente leitura (M1.4).
-- Sury/ondrej continua apenas sinalizado; a inclusão opt-in entra no M1.3.
+- Sury/ondrej continua apenas sinalizado; a inclusão opt-in entra no M1.3b.
 - O helper é aberto por comando. Reutilizar uma sessão no TUI será decidido no M1.4.
 - O teste de execução real em container com systemd entra no M1.5.
+
+### M1.3 — rollback, health check e switch seguro (em andamento)
+
+- [x] Protocolo do helper aceita uma fase `rollback` separada, com ordem e `argv` validados
+  contra o plano em memória.
+- [x] Executor executa o rollback automaticamente, best-effort, na mesma sessão do helper,
+  e retorna o erro original junto com eventuais falhas de rollback.
+- [x] Interrupção por sinal não dispara rollback; o journal e o plano de rollback continuam
+  disponíveis para intervenção manual.
+- [x] Health check de instalação: pacotes, FPM ativo, FPM habilitado no boot, binário e
+  socket (opcional).
+- [x] `switch` reinicia o FPM da versão alvo, valida a unidade e o socket e para o FPM no
+  rollback quando ele foi iniciado pelo plano.
+- [x] Testes de rollback, ordem de fases, `unit-enabled` e restart de FPM no switch.
+- [ ] Sury/ondrej opt-in com confirmação explícita, URL, fingerprint e keyring
+  (`signed-by`), em fatia separada (M1.3b).
+- [ ] Rollback de configuração de repositório e arquivos removidos por `purge` continua
+  best-effort e não transacional.
+- [ ] Vhosts não são reescritos; isso fica no M3.
 
 ### Provider
 
@@ -142,7 +162,8 @@ Regras:
 - O executor só aceita `argv`; verifica o passo anterior antes do próximo.
 - `--dry-run` imprime o plano e não pede sudo; sem ele, há confirmação e `--yes` pula a
   pergunta.
-- Falha no meio grava o journal e para a execução. O rollback automático entra no M1.3.
+- Falha no meio grava o journal, para a execução e dispara o rollback automático
+  best-effort dos passos planejados.
 
 ### Fluxo de instalação
 
@@ -188,8 +209,9 @@ com arquivo 0600; `SO_PEERCRED` confirma root no cliente e o `SUDO_UID` no helpe
 Mensagens do cliente:
 
 ```json
-{"op":"plan","plan":{"schema":1,"action":"install","version":"8.3","steps":[...]}}
+{"op":"plan","plan":{"schema":1,"action":"install","version":"8.3","steps":[...],"rollback":[...]}}
 {"op":"exec","id":"install-packages","argv":["apt-get","install","-y","php8.3-fpm"]}
+{"op":"rollback","id":"rollback-remove-packages","argv":["apt-get","purge","-y","php8.3-fpm"]}
 {"op":"done"}
 ```
 
@@ -207,8 +229,8 @@ Regras de segurança implementadas:
 
 - Senha lida pelo sudo, nunca logada, nunca em argv, nunca em arquivo.
 - Helper recusa `sh`, `bash`, redirecionamentos e binários fora da allowlist.
-- Cada `exec` referencia um passo do plano recebido em memória; o helper valida schema,
-  ação, versão, ID, ordem, `argv` exato e `needs_root`.
+- Cada `exec` ou `rollback` referencia um passo do plano recebido em memória; o helper
+  valida schema, ação, versão, ID, ordem, fase, `argv` exato e `needs_root`.
 - Binários são resolvidos por caminhos absolutos confiáveis, nunca por `PATH`.
 - O JSON Lines não passa pelo stdin/stdout do sudo: usa um socket Unix privado, o que
   evita echo/tradução de bytes quando o sudo habilita `use_pty`.
@@ -236,7 +258,7 @@ Regras de segurança implementadas:
   plano sem root.
 - Nenhuma senha em log, argv, journal ou arquivo temporário.
 - Falha simulada no meio do plano deixa o journal consistente; a execução para no primeiro
-  erro.
+  erro e dispara o rollback automático best-effort.
 - Container limpo → instalar 8.2 → instalar 8.3 via repo externo → trocar → remover 8.2 →
   estado original, em Debian 12 e Ubuntu 24.04 (E2E no M1.5).
 

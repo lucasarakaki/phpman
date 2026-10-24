@@ -125,6 +125,21 @@ func (v SystemVerifier) Verify(ctx context.Context, step core.Step) error {
 		}
 		return fmt.Errorf("unidade %s continua ativa: %s", step.VerifyArgs[0], state)
 
+	case core.VerifyUnitEnabled:
+		if len(step.VerifyArgs) != 1 {
+			return fmt.Errorf("verificação %s exige uma unidade", step.Verify)
+		}
+		out, err := runner.Run(ctx, []string{"systemctl", "is-enabled", step.VerifyArgs[0]})
+		state := strings.TrimSpace(out)
+		switch state {
+		case "enabled", "enabled-runtime":
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("unidade %s não está habilitada: %w (%s)", step.VerifyArgs[0], err, state)
+		}
+		return fmt.Errorf("unidade %s não está habilitada: %s", step.VerifyArgs[0], state)
+
 	case core.VerifySocketExists:
 		if len(step.VerifyArgs) != 1 {
 			return fmt.Errorf("verificação %s exige um caminho", step.Verify)

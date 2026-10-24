@@ -65,13 +65,16 @@ func TestHelperClientProtocol(t *testing.T) {
 	if err := h.Run(context.Background(), plan.Steps[0]); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	if err := h.RunRollback(context.Background(), plan.Rollback[0]); err != nil {
+		t.Fatalf("RunRollback: %v", err)
+	}
 	if err := h.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if got := strings.TrimSpace(stdout.String()); got != "saída do comando" {
+	if got := stdout.String(); !strings.Contains(got, "saída do comando") {
 		t.Errorf("stdout = %q", got)
 	}
-	if got := strings.TrimSpace(stderr.String()); got != "aviso do comando" {
+	if got := stderr.String(); !strings.Contains(got, "aviso do comando") {
 		t.Errorf("stderr = %q", got)
 	}
 }

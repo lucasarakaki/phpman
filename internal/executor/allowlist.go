@@ -181,48 +181,64 @@ func resolveCommand(name string) (string, error) {
 	return "", fmt.Errorf("comando permitido não encontrado ou não confiável: %s", name)
 }
 
-// validatePlan checks the plan envelope and returns its executable steps by ID.
-// Verification-only steps are accepted but cannot be executed by the helper.
-func validatePlan(plan *core.Plan) (map[string]core.Step, error) {
+// validatePlan checks the plan envelope and returns its executable steps by
+// ID. Verification-only steps are accepted but cannot be executed by the
+// helper. Steps and rollback steps are validated independently because the
+// helper executes them in separate phases.
+func validatePlan(plan *core.Plan) (map[string]core.Step, map[string]core.Step, error) {
 	if plan == nil {
-		return nil, fmt.Errorf("plano ausente")
+		return nil, nil, fmt.Errorf("plano ausente")
 	}
 	if plan.Schema != core.PlanSchema {
-		return nil, fmt.Errorf("schema de plano não suportado: %d", plan.Schema)
+		return nil, nil, fmt.Errorf("schema de plano não suportado: %d", plan.Schema)
 	}
 	switch plan.Action {
 	case core.ActionInstall, core.ActionRemove, core.ActionSwitch:
 	default:
-		return nil, fmt.Errorf("ação de plano desconhecida: %q", plan.Action)
+		return nil, nil, fmt.Errorf("ação de plano desconhecida: %q", plan.Action)
 	}
 	if !planVersionRe.MatchString(plan.Version) {
-		return nil, fmt.Errorf("versão de plano inválida: %q", plan.Version)
+		return nil, nil, fmt.Errorf("versão de plano inválida: %q", plan.Version)
 	}
-	if len(plan.Steps) > 64 {
-		return nil, fmt.Errorf("plano com passos demais")
+	if len(plan.Steps) > 64 || len(plan.Rollback) > 64 {
+		return nil, nil, fmt.Errorf("plano com passos demais")
 	}
 
-	steps := make(map[string]core.Step, len(plan.Steps))
-	for _, step := range plan.Steps {
-		if step.ID == "" {
-			return nil, fmt.Errorf("passo sem id")
-		}
-		if _, exists := steps[step.ID]; exists {
-			return nil, fmt.Errorf("id de passo duplicado: %q", step.ID)
-		}
-		if len(step.Argv) > 0 {
-			if !step.NeedsRoot {
-				return nil, fmt.Errorf("helper só executa passos que exigem root: %q", step.ID)
+	seen := make(map[string]bool, len(plan.Steps)+len(plan.Rollback))
+	index := func(steps []core.Step, phase string) (map[string]core.Step, error) {
+		indexed := make(map[string]core.Step, len(steps))
+		for _, step := range steps {
+			if step.ID == "" {
+				return nil, fmt.Errorf("passo sem id em %s", phase)
 			}
-			if err := validateArgv(step.Argv); err != nil {
-				return nil, fmt.Errorf("passo %q: %w", step.ID, err)
+			if seen[step.ID] {
+				return nil, fmt.Errorf("id de passo duplicado: %q", step.ID)
 			}
-		} else if step.Verify == "" {
-			return nil, fmt.Errorf("passo %q não tem comando nem verificação", step.ID)
+			seen[step.ID] = true
+			if len(step.Argv) > 0 {
+				if !step.NeedsRoot {
+					return nil, fmt.Errorf("helper só executa passos que exigem root: %q", step.ID)
+				}
+				if err := validateArgv(step.Argv); err != nil {
+					return nil, fmt.Errorf("passo %q: %w", step.ID, err)
+				}
+			} else if step.Verify == "" {
+				return nil, fmt.Errorf("passo %q não tem comando nem verificação", step.ID)
+			}
+			indexed[step.ID] = step
 		}
-		steps[step.ID] = step
+		return indexed, nil
 	}
-	return steps, nil
+
+	steps, err := index(plan.Steps, "passos")
+	if err != nil {
+		return nil, nil, err
+	}
+	rollback, err := index(plan.Rollback, "rollback")
+	if err != nil {
+		return nil, nil, err
+	}
+	return steps, rollback, nil
 }
 
 func sameArgv(a, b []string) bool {

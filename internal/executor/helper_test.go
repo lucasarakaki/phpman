@@ -31,6 +31,12 @@ func testPlan() *core.Plan {
 			NeedsRoot: true,
 			Verify:    core.VerifyPackagesInstalled,
 		}},
+		Rollback: []core.Step{{
+			ID:        "rollback-remove",
+			Argv:      []string{"apt-get", "purge", "-y", "php8.3-cli"},
+			NeedsRoot: true,
+			Verify:    core.VerifyPackagesAbsent,
+		}},
 	}
 }
 
@@ -124,6 +130,81 @@ func TestServeHelperExecutesPlanStep(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatalf("serveHelper: %v", err)
+	}
+}
+
+func TestServeHelperExecutesRollbackStepInOwnPhase(t *testing.T) {
+	plan := testPlan()
+	var got [][]string
+	runner := fakeCommandRunner{run: func(_ context.Context, argv []string, _, _ io.Writer) error {
+		got = append(got, append([]string(nil), argv...))
+		return nil
+	}}
+	resolve := func(argv []string) ([]string, error) { return argv, nil }
+
+	enc, dec, done := startHelperServer(t, plan, runner, resolve)
+	runStep := func(req request) {
+		t.Helper()
+		if err := enc.Encode(req); err != nil {
+			t.Fatalf("enviar %s: %v", req.Op, err)
+		}
+		for {
+			var ev event
+			if err := dec.Decode(&ev); err != nil {
+				t.Fatalf("ler evento: %v", err)
+			}
+			if ev.Kind == kindExit {
+				if ev.Exit == nil || *ev.Exit != 0 {
+					t.Fatalf("exit = %v", ev.Exit)
+				}
+				return
+			}
+			if ev.Kind == kindError {
+				t.Fatalf("erro inesperado: %s", ev.Error)
+			}
+		}
+	}
+
+	runStep(request{Op: opExec, ID: plan.Steps[0].ID, Argv: plan.Steps[0].Argv})
+	runStep(request{Op: opRollback, ID: plan.Rollback[0].ID, Argv: plan.Rollback[0].Argv})
+
+	if len(got) != 2 || !sameArgv(got[0], plan.Steps[0].Argv) || !sameArgv(got[1], plan.Rollback[0].Argv) {
+		t.Errorf("argv executados = %#v", got)
+	}
+
+	if err := enc.Encode(request{Op: opDone}); err != nil {
+		t.Fatalf("enviar done: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("serveHelper: %v", err)
+	}
+}
+
+func TestServeHelperRejectsRollbackOutOfOrder(t *testing.T) {
+	called := false
+	runner := fakeCommandRunner{run: func(context.Context, []string, io.Writer, io.Writer) error {
+		called = true
+		return nil
+	}}
+	resolve := func(argv []string) ([]string, error) { return argv, nil }
+	plan := testPlan()
+
+	enc, dec, done := startHelperServer(t, plan, runner, resolve)
+	if err := enc.Encode(request{Op: opRollback, ID: plan.Steps[0].ID, Argv: plan.Steps[0].Argv}); err != nil {
+		t.Fatalf("enviar rollback: %v", err)
+	}
+	var ev event
+	if err := dec.Decode(&ev); err != nil {
+		t.Fatalf("ler evento: %v", err)
+	}
+	if ev.Kind != kindError || !strings.Contains(ev.Error, "fora da ordem") {
+		t.Fatalf("evento = %+v, esperado erro de ordem", ev)
+	}
+	if err := <-done; err == nil {
+		t.Error("serveHelper deveria terminar com erro")
+	}
+	if called {
+		t.Error("rollback foi executado antes dos passos normais")
 	}
 }
 

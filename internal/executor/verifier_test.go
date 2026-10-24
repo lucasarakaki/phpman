@@ -106,6 +106,26 @@ func TestSystemVerifierUnits(t *testing.T) {
 	}); err == nil {
 		t.Error("unidade inativa foi aceita como ativa")
 	}
+
+	enabled := SystemVerifier{Runner: fakeOutput{outputs: map[string]string{
+		"systemctl is-enabled php8.3-fpm.service": "enabled\n",
+	}}}
+	if err := enabled.Verify(context.Background(), core.Step{
+		Verify:     core.VerifyUnitEnabled,
+		VerifyArgs: []string{"php8.3-fpm.service"},
+	}); err != nil {
+		t.Fatalf("unidade habilitada: %v", err)
+	}
+	disabled := SystemVerifier{Runner: fakeOutput{
+		outputs: map[string]string{"systemctl is-enabled php8.3-fpm.service": "disabled\n"},
+		errs:    map[string]error{"systemctl is-enabled php8.3-fpm.service": errors.New("exit status 1")},
+	}}
+	if err := disabled.Verify(context.Background(), core.Step{
+		Verify:     core.VerifyUnitEnabled,
+		VerifyArgs: []string{"php8.3-fpm.service"},
+	}); err == nil {
+		t.Error("unidade desabilitada foi aceita")
+	}
 }
 
 func TestSystemVerifierAlternativeCurrent(t *testing.T) {

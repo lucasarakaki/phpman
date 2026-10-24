@@ -37,9 +37,10 @@ func serveHelper(
 	enc.SetEscapeHTML(false)
 
 	var plan *core.Plan
-	var steps map[string]core.Step
-	var order []string
-	next := 0
+	var steps, rollback map[string]core.Step
+	var order, rollbackOrder []string
+	next, rollbackNext := 0, 0
+	rollbackStarted := false
 
 	for {
 		var req request
@@ -58,26 +59,39 @@ func serveHelper(
 			if req.Plan == nil {
 				return reject(enc, req.ID, "mensagem plan sem plano")
 			}
-			validated, err := validatePlan(req.Plan)
+			validatedSteps, validatedRollback, err := validatePlan(req.Plan)
 			if err != nil {
 				return reject(enc, req.ID, err.Error())
 			}
 			plan = req.Plan
-			steps = validated
-			order = executableOrder(plan)
-			next = 0
+			steps = validatedSteps
+			rollback = validatedRollback
+			order = executableOrder(plan.Steps)
+			rollbackOrder = executableOrder(plan.Rollback)
+			next, rollbackNext = 0, 0
+			rollbackStarted = false
 			if err := enc.Encode(event{Kind: kindReady}); err != nil {
 				return err
 			}
 
-		case opExec:
+		case opExec, opRollback:
 			if plan == nil || steps == nil {
-				return reject(enc, req.ID, "exec antes de carregar o plano")
+				return reject(enc, req.ID, "execução antes de carregar o plano")
 			}
-			if next >= len(order) || req.ID != order[next] {
+			if req.Op == opExec && rollbackStarted {
+				return reject(enc, req.ID, "passo normal após o início do rollback")
+			}
+			if req.Op == opRollback {
+				rollbackStarted = true
+			}
+			phaseOrder, phaseSteps, phaseNext := order, steps, &next
+			if req.Op == opRollback {
+				phaseOrder, phaseSteps, phaseNext = rollbackOrder, rollback, &rollbackNext
+			}
+			if *phaseNext >= len(phaseOrder) || req.ID != phaseOrder[*phaseNext] {
 				return reject(enc, req.ID, "passo fora da ordem do plano: "+req.ID)
 			}
-			step, ok := steps[req.ID]
+			step, ok := phaseSteps[req.ID]
 			if !ok {
 				return reject(enc, req.ID, "passo não pertence ao plano: "+req.ID)
 			}
@@ -87,7 +101,7 @@ func serveHelper(
 			if err := executeStep(ctx, enc, j, runner, resolve, plan, step, req.ID); err != nil {
 				return err
 			}
-			next++
+			*phaseNext = *phaseNext + 1
 
 		case opDone:
 			return nil
@@ -98,9 +112,9 @@ func serveHelper(
 	}
 }
 
-func executableOrder(plan *core.Plan) []string {
-	order := make([]string, 0, len(plan.Steps))
-	for _, step := range plan.Steps {
+func executableOrder(steps []core.Step) []string {
+	order := make([]string, 0, len(steps))
+	for _, step := range steps {
 		if len(step.Argv) > 0 {
 			order = append(order, step.ID)
 		}

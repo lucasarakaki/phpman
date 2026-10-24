@@ -26,7 +26,7 @@ func WritePlan(w io.Writer, plan *core.Plan, color bool) {
 // WritePlanExecution renders a plan that is about to run. It still shows the
 // exact argv and the planned rollback, but does not pretend to be a dry-run.
 func WritePlanExecution(w io.Writer, plan *core.Plan, color bool) {
-	writePlan(w, plan, color, "· revise antes de executar", "O rollback está planejado, mas a execução automática chega no M1.3.")
+	writePlan(w, plan, color, "· revise antes de executar", "Se um passo falhar, o rollback abaixo será executado automaticamente, best-effort.")
 }
 
 func writePlan(w io.Writer, plan *core.Plan, color bool, banner, rollbackNote string) {
