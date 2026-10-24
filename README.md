@@ -2,7 +2,7 @@
 
 ![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
 ![Licença MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green)
-![Status M1.2](https://img.shields.io/badge/status-M1.2%20execu%C3%A7%C3%A3o-blue)
+![Status M1.3](https://img.shields.io/badge/status-M1.3%20rollback%20e%20health%20check-blue)
 
 Inventário e diagnóstico de instalações PHP em distribuições Linux, com uma interface de
 terminal no estilo lazydocker.
@@ -11,11 +11,13 @@ O phpman responde, em um só lugar, perguntas que costumam exigir meia dúzia de
 qual PHP está realmente ativo, qual socket o FPM usa, por que um site quebrou depois de
 uma atualização e por que o `php -v` do terminal não é o mesmo PHP que o nginx executa.
 
-> **Status: M1.2 — execução com confirmação.** O phpman detecta o ambiente, aponta
+> **Status: M1.3 — rollback e health check.** O phpman detecta o ambiente, aponta
 > problemas, gera planos e aplica `install`, `remove` e `switch` em Debian/Ubuntu por um
-> helper privilegiado efêmero, com allowlist, verificação passo a passo e journal. A
-> detecção e o `--dry-run` continuam sem root. O rollback automático e as ações na TUI
-> chegam no M1.3/M1.4. O plano completo está em [docs/ROADMAP.md](docs/ROADMAP.md).
+> helper privilegiado efêmero, com allowlist, verificação passo a passo, journal e
+> rollback automático best-effort em caso de falha. A troca reinicia e valida o FPM da
+> versão alvo. A detecção e o `--dry-run` continuam sem root. Sury/ondrej opt-in e as
+> ações na TUI entram nas próximas fatias. O plano completo está em
+> [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Sumário
 
@@ -44,7 +46,7 @@ desabilitada, e como desfazer uma mudança sem deixar o servidor em um estado am
 
 O phpman trata o ambiente PHP como um inventário: primeiro **observa** tudo, depois
 **diagnostica**, e só então **planeja e executa** mudanças com confirmação, privilégio
-mínimo e rollback planejado.
+mínimo e rollback automático best-effort.
 
 ## Recursos
 
@@ -71,12 +73,14 @@ mínimo e rollback planejado.
 **Planejamento e execução**
 
 - Gera planos de instalação, remoção e troca para Debian/Ubuntu.
-- Mostra os `argv` exatos, os verificadores e o rollback previsto.
+- Mostra os `argv` exatos, os verificadores e o rollback que será executado se algo falhar.
 - Exporta o plano em JSON (`schema: 1`) para revisão e testes de contrato.
 - Executa com confirmação (`--yes` para automação) por um helper sudo efêmero.
 - Valida cada passo contra o plano em memória e contra uma allowlist: `apt-get`,
   `systemctl` de unidades PHP-FPM e `update-alternatives` do PHP.
-- Verifica o estado depois de cada passo e para no primeiro erro.
+- Verifica o estado depois de cada passo, incluindo FPM ativo e habilitado no boot.
+- Executa o rollback do plano automaticamente, best-effort, quando um passo falha.
+- Reinicia e valida o FPM da versão alvo ao trocar a versão ativa.
 - Registra comandos, códigos de saída e erros em `/var/lib/phpman/journal.jsonl`.
 - Bloqueia a remoção da versão ativa e avisa sobre vhosts afetados.
 
@@ -152,8 +156,13 @@ PASSOS
      apt-get install -y --no-install-recommends php8.3-cli php8.3-common php8.3-fpm php8.3-opcache
   2. Habilitar e iniciar o FPM
      systemctl enable --now php8.3-fpm.service
-  3. Confirmar que o binário responde com a versão esperada
+  3. Confirmar que o FPM está habilitado no boot
+     verificação: unit-enabled php8.3-fpm.service
+  4. Confirmar que o binário responde com a versão esperada
      verificação: binary-version /usr/bin/php8.3 8.3
+  5. Confirmar que o socket padrão do FPM foi criado
+     verificação: socket-exists /run/php/php8.3-fpm.sock
+     (opcional)
 
 ROLLBACK
   1. Parar e desabilitar o FPM instalado
@@ -180,7 +189,10 @@ O fluxo de execução:
    `update-alternatives --set` de `php`, `phpize`, `php-config`, `phpdbg` e `phar`.
 4. Cada comando roda sem shell, com ambiente não interativo e timeout.
 5. O executor verifica o estado depois do passo; no primeiro erro obrigatório ele para.
-6. O helper grava início e fim de cada comando em `/var/lib/phpman/journal.jsonl`.
+6. Antes de retornar o erro, o executor executa o rollback do plano na mesma sessão do
+   helper, em ordem, continuando mesmo se um passo de rollback falhar.
+7. O helper grava início e fim de cada comando, inclusive rollback, em
+   `/var/lib/phpman/journal.jsonl`.
 
 Para inspecionar o plano em scripts:
 
@@ -195,8 +207,10 @@ As regras atuais:
 - O plano nunca usa shell: cada passo é uma lista de argumentos.
 - Remover a versão ativa é bloqueado; troque de versão primeiro.
 - A remoção avisa quais vhosts usam o socket da versão.
-- O rollback é planejado e exibido, mas sua execução automática entra no M1.3.
-- `switch` só altera `update-alternatives`; reiniciar FPM e reescrever vhosts entra no M1.3.
+- Se um passo obrigatório falhar, o rollback do plano é executado automaticamente e
+  best-effort; interrupções por sinal não disparam rollback.
+- `switch` altera `update-alternatives`, reinicia o FPM da versão alvo e valida a unidade
+  e o socket. Vhosts que apontam para o socket de outra versão ainda não são reescritos.
 - Repositórios de terceiros são apenas sinalizados nesta etapa; a inclusão de sury/ondrej
   com confirmação explícita entra numa fatia seguinte.
 
@@ -236,7 +250,7 @@ Teclas:
 | `?` | abrir a ajuda |
 | `q` / `ctrl+c` | sair |
 
-A TUI continua somente leitura no M1.2; as ações de escrita pela interface entram no M1.4.
+A TUI continua somente leitura no M1.3; as ações de escrita pela interface entram no M1.4.
 
 ## Saída JSON
 
@@ -393,8 +407,9 @@ systemd, o E2E completo com systemd e a matriz de containers entram no M1.5.
 |---|---|
 | **M0** (concluído) | detecção, TUI somente leitura, `status --json`, `doctor` |
 | **M1.1** (concluído) | planos apt de instalar/remover/trocar, `--dry-run` e JSON |
-| **M1.2** (atual) | executor, helper sudo, allowlist, journal e confirmação |
-| M1.3 | health check, rollback automático e sury/ondrej opt-in |
+| **M1.2** (concluído) | executor, helper sudo, allowlist, journal e confirmação |
+| **M1.3** (atual) | rollback automático, health check e restart de FPM no switch |
+| M1.3b | sury/ondrej opt-in com confirmação explícita |
 | M1.4 | ações na TUI |
 | M1.5 | containers Debian/Ubuntu e release |
 | M2 | extensões por versão e suporte a Fedora/RHEL via Remi |
