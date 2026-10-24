@@ -48,14 +48,22 @@ func (p *Provider) PlanInstall(snap *core.Snapshot, raw string, opts provider.Op
 	}}
 
 	if opts.WithFPM {
-		steps = append(steps, core.Step{
-			ID:          "enable-fpm",
-			Description: "Habilitar e iniciar o FPM",
-			Argv:        []string{"systemctl", "enable", "--now", unit},
-			NeedsRoot:   true,
-			Verify:      core.VerifyUnitActive,
-			VerifyArgs:  []string{unit},
-		})
+		steps = append(steps,
+			core.Step{
+				ID:          "enable-fpm",
+				Description: "Habilitar e iniciar o FPM",
+				Argv:        []string{"systemctl", "enable", "--now", unit},
+				NeedsRoot:   true,
+				Verify:      core.VerifyUnitActive,
+				VerifyArgs:  []string{unit},
+			},
+			core.Step{
+				ID:          "verify-fpm-enabled",
+				Description: "Confirmar que o FPM está habilitado no boot",
+				Verify:      core.VerifyUnitEnabled,
+				VerifyArgs:  []string{unit},
+			},
+		)
 	}
 
 	steps = append(steps, core.Step{
@@ -237,6 +245,47 @@ func (p *Provider) PlanSwitch(snap *core.Snapshot, raw string) (*core.Plan, erro
 			VerifyArgs:  []string{"/usr/bin/php", raw},
 		})
 	}
+
+	if target := snap.Version(raw); switchedPHP && target != nil {
+		if fpm, ok := target.SAPI(core.SAPIFPM); ok {
+			unit := fpm.Unit
+			if unit == "" {
+				unit = fpmUnit(raw)
+			}
+			steps = append(steps, core.Step{
+				ID:          "restart-fpm",
+				Description: "Reiniciar o FPM de PHP " + raw + " para aplicar a troca",
+				Argv:        []string{"systemctl", "restart", unit},
+				NeedsRoot:   true,
+				Verify:      core.VerifyUnitActive,
+				VerifyArgs:  []string{unit},
+			})
+			socket := fpm.Socket
+			if socket == "" {
+				socket = fpmSocket(raw)
+			}
+			steps = append(steps, core.Step{
+				ID:          "verify-fpm-socket",
+				Description: "Confirmar que o socket do FPM foi recriado",
+				Verify:      core.VerifySocketExists,
+				VerifyArgs:  []string{socket},
+				Optional:    true,
+			})
+			if active, known := serviceActive(snap, unit); known && !active {
+				rollback = append(rollback, core.Step{
+					ID:          "rollback-stop-fpm",
+					Description: "Parar o FPM iniciado pelo plano",
+					Argv:        []string{"systemctl", "stop", unit},
+					NeedsRoot:   true,
+					Verify:      core.VerifyUnitInactive,
+					VerifyArgs:  []string{unit},
+				})
+			}
+			warnings = append(warnings, "O FPM de PHP "+raw+" será reiniciado; vhosts que apontam para o socket de outra versão não são reescritos.")
+		} else {
+			warnings = append(warnings, "PHP "+raw+" não tem unidade FPM detectada; nenhum serviço será reiniciado.")
+		}
+	}
 	if len(steps) == 0 && len(warnings) == 0 {
 		warnings = append(warnings, "Nenhum alternative precisava ser alterado.")
 	}
@@ -245,7 +294,7 @@ func (p *Provider) PlanSwitch(snap *core.Snapshot, raw string) (*core.Plan, erro
 		warnings = append(warnings, "O PHP resolvido pelo PATH deste usuário é "+snap.PathVersion+"; update-alternatives pode não alterar este shell.")
 	}
 	if snap.ActiveVersion != "" {
-		warnings = append(warnings, "Serviços FPM em execução e vhosts não são reiniciados ou reescritos por esta troca.")
+		warnings = append(warnings, "Vhosts não são reescritos; apenas o FPM alvo é reiniciado.")
 	}
 
 	return newPlan(core.ActionSwitch, raw, "Trocar a versão ativa para PHP "+raw, steps, rollback, warnings), nil
@@ -379,6 +428,15 @@ func alternativePath(alt core.Alternative, raw string) (string, bool) {
 
 func fpmUnit(raw string) string   { return "php" + raw + "-fpm.service" }
 func fpmSocket(raw string) string { return "/run/php/php" + raw + "-fpm.sock" }
+
+func serviceActive(snap *core.Snapshot, unit string) (active, known bool) {
+	for _, svc := range snap.Services {
+		if svc.Unit == unit {
+			return svc.Active, true
+		}
+	}
+	return false, false
+}
 
 func newPlan(action core.Action, raw, summary string, steps, rollback []core.Step, warnings []string) *core.Plan {
 	if steps == nil {
