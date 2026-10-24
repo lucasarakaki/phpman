@@ -152,15 +152,20 @@ func cmdPlan(ctx context.Context, action core.Action, args []string) {
 	asJSON := fs.Bool("json", false, "emite o plano em JSON; exige --dry-run")
 	yes := fs.Bool("yes", false, "executa sem pedir confirmação")
 	fs.BoolVar(yes, "y", false, "alias de --yes")
+	thirdParty := fs.Bool("third-party", false, "permite adicionar o repositório Sury/ondrej quando a versão não está no catálogo atual")
 	noColor := fs.Bool("no-color", false, "desativa cores")
 	_ = fs.Parse(reorderPlanArgs(args))
 
 	if fs.NArg() != 1 {
-		fmt.Fprintf(os.Stderr, "phpman: use phpman %s <X.Y> [--dry-run] [--yes]\n", action)
+		fmt.Fprintf(os.Stderr, "phpman: use phpman %s <X.Y> [--dry-run] [--yes] [--third-party]\n", action)
 		os.Exit(2)
 	}
 	if *asJSON && !*dryRun {
 		fmt.Fprintln(os.Stderr, "phpman: --json exige --dry-run; a saída JSON descreve o plano e não executa")
+		os.Exit(2)
+	}
+	if *thirdParty && action != core.ActionInstall {
+		fmt.Fprintln(os.Stderr, "phpman: --third-party só se aplica a install")
 		os.Exit(2)
 	}
 
@@ -177,7 +182,9 @@ func cmdPlan(ctx context.Context, action core.Action, args []string) {
 	var plan *core.Plan
 	switch action {
 	case core.ActionInstall:
-		plan, err = prov.PlanInstall(snap, raw, provider.DefaultOptions())
+		opts := provider.DefaultOptions()
+		opts.AllowThirdParty = *thirdParty
+		plan, err = prov.PlanInstall(snap, raw, opts)
 	case core.ActionRemove:
 		plan, err = prov.PlanRemove(snap, raw)
 	case core.ActionSwitch:
@@ -209,7 +216,7 @@ func cmdPlan(ctx context.Context, action core.Action, args []string) {
 			fmt.Fprintln(os.Stderr, "phpman: sem TTY para confirmar; use --yes para executar o plano")
 			os.Exit(2)
 		}
-		ok, err := confirmPlan(os.Stdout, os.Stdin)
+		ok, err := confirmPlan(os.Stdout, os.Stdin, plan.Repository != nil)
 		if err != nil {
 			fail(err)
 		}
@@ -248,8 +255,12 @@ func cmdPlan(ctx context.Context, action core.Action, args []string) {
 	}
 }
 
-func confirmPlan(w io.Writer, r io.Reader) (bool, error) {
-	fmt.Fprint(w, "\nExecutar este plano? [s/N] ")
+func confirmPlan(w io.Writer, r io.Reader, thirdParty bool) (bool, error) {
+	prompt := "\nExecutar este plano? [s/N] "
+	if thirdParty {
+		prompt = "\nAdicionar o repositório Sury/ondrej e executar este plano? [s/N] "
+	}
+	fmt.Fprint(w, prompt)
 	line, err := bufio.NewReader(r).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err
@@ -285,6 +296,7 @@ func failPlan(err error) {
 		provider.ErrVersionUnavailable,
 		provider.ErrActiveVersion,
 		provider.ErrNoPackages,
+		provider.ErrThirdPartyUnsupported,
 	} {
 		if errors.Is(err, sentinel) {
 			fmt.Fprintf(os.Stderr, "phpman: %v\n", err)
@@ -329,6 +341,8 @@ Uso:
   phpman status --json              inventário em JSON (para scripts)
   phpman doctor                     apenas diagnósticos e sugestões
   phpman install <X.Y> [--dry-run]  instala uma versão (pede sudo)
+  phpman install <X.Y> --third-party
+                                    permite adicionar o repositório Sury/ondrej
   phpman remove <X.Y> [--dry-run]   remove uma versão (pede sudo)
   phpman switch <X.Y> [--dry-run]   troca a versão ativa (pede sudo)
   phpman install <X.Y> --yes        executa sem confirmar
@@ -341,6 +355,11 @@ efêmero __helper roda como root, via sudo. Para executar planos, instale o
 binário root-owned com "sudo make install" em /usr/local/bin.
 
 O plano pode ser emitido em JSON com --dry-run --json.
+
+Quando a versão não está no catálogo da distribuição, --third-party permite
+planejar a inclusão do repositório Sury/ondrej. O plano mostra a URL, a URL da
+chave, o keyring com signed-by e o fingerprint esperado; a confirmação menciona
+explicitamente o repositório de terceiros.
 
 Variáveis:
   NO_COLOR=1             desativa cores
