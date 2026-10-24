@@ -3,20 +3,27 @@ package executor
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 
 	"github.com/lucasarakaki/phpman/internal/core"
 )
 
+// FileWriter is the narrow privileged file-write primitive used by the helper.
+// Tests inject a fake implementation; production uses writeFileAtomic.
+type FileWriter func(path, content string, mode os.FileMode) error
+
 // ServeHelper is the privileged side of the JSON-lines protocol. The caller
 // must already be root; the CLI checks that before invoking it.
 func ServeHelper(ctx context.Context, in io.Reader, out io.Writer, journalPath string) error {
-	return serveHelper(ctx, in, out, journalPath, OSCommandRunner{}, resolveArgv)
+	return serveHelper(ctx, in, out, journalPath, OSCommandRunner{}, resolveArgv, writeFileAtomic)
 }
 
 func serveHelper(
@@ -26,6 +33,7 @@ func serveHelper(
 	journalPath string,
 	runner CommandRunner,
 	resolve func([]string) ([]string, error),
+	writeFile FileWriter,
 ) error {
 	j, err := newJournal(journalPath)
 	if err != nil {
@@ -98,7 +106,7 @@ func serveHelper(
 			if !sameArgv(req.Argv, step.Argv) {
 				return reject(enc, req.ID, "argv diverge do plano para o passo "+req.ID)
 			}
-			if err := executeStep(ctx, enc, j, runner, resolve, plan, step, req.ID); err != nil {
+			if err := executeStep(ctx, enc, j, runner, resolve, writeFile, plan, step, req.ID); err != nil {
 				return err
 			}
 			*phaseNext = *phaseNext + 1
@@ -115,7 +123,7 @@ func serveHelper(
 func executableOrder(steps []core.Step) []string {
 	order := make([]string, 0, len(steps))
 	for _, step := range steps {
-		if len(step.Argv) > 0 {
+		if len(step.Argv) > 0 || step.File != nil {
 			order = append(order, step.ID)
 		}
 	}
@@ -135,10 +143,15 @@ func executeStep(
 	j *journal,
 	runner CommandRunner,
 	resolve func([]string) ([]string, error),
+	writeFile FileWriter,
 	plan *core.Plan,
 	step core.Step,
 	id string,
 ) error {
+	if step.File != nil {
+		return executeFileStep(ctx, enc, j, writeFile, plan, step, id)
+	}
+
 	canonical, err := resolve(step.Argv)
 	if err != nil {
 		return reject(enc, id, err.Error())
@@ -186,6 +199,58 @@ func executeStep(
 	}
 	if flushErr != nil {
 		return reject(enc, id, flushErr.Error())
+	}
+	return enc.Encode(event{Kind: kindExit, ID: id, Exit: &code, Error: errText})
+}
+
+func executeFileStep(
+	ctx context.Context,
+	enc *json.Encoder,
+	j *journal,
+	writeFile FileWriter,
+	plan *core.Plan,
+	step core.Step,
+	id string,
+) error {
+	if step.File == nil {
+		return reject(enc, id, "passo de arquivo sem conteúdo")
+	}
+	if err := ctx.Err(); err != nil {
+		return reject(enc, id, err.Error())
+	}
+
+	sum := sha256.Sum256([]byte(step.File.Content))
+	hash := hex.EncodeToString(sum[:])
+	start := journalEvent{
+		Phase:   "start",
+		Action:  plan.Action,
+		Version: plan.Version,
+		Step:    step.ID,
+		File:    step.File.Path,
+		SHA256:  hash,
+	}
+	if err := j.write(start); err != nil {
+		return reject(enc, id, err.Error())
+	}
+
+	writeErr := writeFile(step.File.Path, step.File.Content, os.FileMode(step.File.Mode))
+	code := exitCode(writeErr)
+	errText := ""
+	if writeErr != nil {
+		errText = writeErr.Error()
+	}
+	finish := journalEvent{
+		Phase:   "finish",
+		Action:  plan.Action,
+		Version: plan.Version,
+		Step:    step.ID,
+		File:    step.File.Path,
+		SHA256:  hash,
+		Exit:    &code,
+		Error:   errText,
+	}
+	if err := j.write(finish); err != nil {
+		return reject(enc, id, err.Error())
 	}
 	return enc.Encode(event{Kind: kindExit, ID: id, Exit: &code, Error: errText})
 }

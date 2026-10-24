@@ -234,4 +234,33 @@ func TestNeedsHelper(t *testing.T) {
 	if !NeedsHelper(rollbackOnly) {
 		t.Error("plano com rollback root precisa de helper")
 	}
+
+	fileStep := &core.Plan{Steps: []core.Step{
+		{ID: "write", File: &core.FileWrite{Path: surySourceFile, Content: "x", Mode: 0o644}, NeedsRoot: true},
+	}}
+	if !NeedsHelper(fileStep) {
+		t.Error("plano com escrita de arquivo root precisa de helper")
+	}
+}
+
+func TestExecutorRunsFileStepThroughHelper(t *testing.T) {
+	plan := &core.Plan{
+		Schema:  core.PlanSchema,
+		Action:  core.ActionInstall,
+		Version: "8.3",
+		Steps: []core.Step{{
+			ID:        "write",
+			File:      &core.FileWrite{Path: surySourceFile, Content: "x", Mode: 0o644},
+			NeedsRoot: true,
+		}},
+	}
+	priv := &fakePriv{}
+	verifier := &fakeVerifier{}
+	ex := &Executor{Priv: priv, Verifier: verifier}
+	if err := ex.Run(context.Background(), plan); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(priv.steps) != 1 || priv.steps[0].File == nil {
+		t.Errorf("passos privilegiados = %+v", priv.steps)
+	}
 }
