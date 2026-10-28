@@ -2,7 +2,7 @@
 
 ![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
 ![Licença MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green)
-![Status M1.3b](https://img.shields.io/badge/status-M1.3b%20Sury%2Fondrej%20opt--in-blue)
+![Status M1.4](https://img.shields.io/badge/status-M1.4%20a%C3%A7%C3%B5es%20na%20TUI-blue)
 
 Inventário e diagnóstico de instalações PHP em distribuições Linux, com uma interface de
 terminal no estilo lazydocker.
@@ -11,14 +11,17 @@ O phpman responde, em um só lugar, perguntas que costumam exigir meia dúzia de
 qual PHP está realmente ativo, qual socket o FPM usa, por que um site quebrou depois de
 uma atualização e por que o `php -v` do terminal não é o mesmo PHP que o nginx executa.
 
-> **Status: M1.3b — Sury/ondrej opt-in.** O phpman detecta o ambiente, aponta
-> problemas, gera planos e aplica `install`, `remove` e `switch` em Debian/Ubuntu por um
-> helper privilegiado efêmero, com allowlist, verificação passo a passo, journal e
-> rollback automático best-effort em caso de falha. A troca reinicia e valida o FPM da
-> versão alvo. Quando a versão não está no catálogo da distribuição, `--third-party`
-> permite planejar o repositório Sury/ondrej com URL, fingerprint e keyring `signed-by`
-> explícitos. A detecção e o `--dry-run` continuam sem root. As ações na TUI entram no
-> M1.4. O plano completo está em [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: M1.4 — ações na TUI.** O phpman detecta o ambiente, aponta problemas, gera
+> planos e aplica `install`, `remove` e `switch` em Debian/Ubuntu por um helper
+> privilegiado efêmero, com allowlist, verificação passo a passo, journal e rollback
+> automático best-effort em caso de falha. A troca reinicia e valida o FPM da versão alvo.
+> Na TUI, a aba *Versões* permite instalar, trocar e remover com prévia rolável do plano;
+> a execução suspende a interface e usa o mesmo CLI, que refaz o plano e pede a
+> confirmação final no terminal. Quando a versão não está no catálogo da distribuição, o
+> plano mostra o repositório Sury/ondrej com URL, fingerprint e keyring `signed-by`
+> explícitos antes da confirmação. A detecção e o `--dry-run` continuam sem root. O
+> release M1 depende do M1.5. O plano completo está em
+> [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Sumário
 
@@ -93,6 +96,8 @@ mínimo e rollback automático best-effort.
 **Interface**
 
 - TUI com abas *Visão geral*, *Versões* e *Doutor*, responsiva a terminais estreitos.
+- Ações de instalar, trocar e remover na aba *Versões*, com prévia rolável do plano,
+  avisos e rollback antes da execução.
 - `status` em texto, `status --json` para scripts e `doctor` para diagnóstico rápido.
 - Fallback automático para texto quando não há TTY.
 
@@ -295,11 +300,19 @@ Teclas:
 | `1` `2` `3` | ir direto para uma aba |
 | `↑` `↓` / `k` `j` | navegar na lista |
 | `g` / `G` | primeiro / último item |
+| `i` | instalar uma versão (aba *Versões*) |
+| `s` | trocar para a versão instalada selecionada |
+| `d` | remover a versão instalada selecionada |
 | `r` | redetectar o ambiente |
 | `?` | abrir a ajuda |
 | `q` / `ctrl+c` | sair |
 
-A TUI continua somente leitura no M1.3b; as ações de escrita pela interface entram no M1.4.
+Na aba *Versões*, `i` abre o campo de versão já preenchido com o item selecionado. Se a
+versão não estiver no catálogo, o plano inclui os metadados do repositório Sury/ondrej e
+só é executado depois da confirmação explícita. `s` e `d` planejam a troca e a remoção de
+uma versão instalada. O plano completo aparece em um diálogo rolável; ao confirmar, a TUI
+é suspensa e o mesmo binário executa o subcomando correspondente, refaz o plano e pede a
+confirmação final no terminal. A TUI nunca roda como root e não lê a senha do sudo.
 
 ## Saída JSON
 
@@ -383,7 +396,9 @@ catálogo de pacotes e o planejamento dependem do provider da família.
 
 - Detecção, `status`, `doctor` e `--dry-run` rodam sem root; a TUI recusa ser iniciada como
   root.
-- Toda escrita exige plano, confirmação (ou `--yes`) e um helper sudo efêmero.
+- Toda escrita exige plano, confirmação (ou `--yes`) e um helper sudo efêmero. As ações da
+  TUI suspendem a interface e delegam ao mesmo CLI; não existe helper persistente nem
+  execução privilegiada dentro da TUI.
 - O helper valida o plano em memória, a ordem dos passos e o `argv` exato antes de executar.
 - O protocolo usa um socket Unix 0600 em diretório 0700 do usuário; o cliente confere que
   o peer é root e o helper confere que o peer é o usuário que invocou o sudo.
@@ -464,8 +479,8 @@ systemd, o E2E completo com systemd e a matriz de containers entram no M1.5.
 | **M1.2** (concluído) | executor, helper sudo, allowlist, journal e confirmação |
 | **M1.3** (concluído) | rollback automático, health check e restart de FPM no switch |
 | **M1.3b** (concluído) | Sury/ondrej opt-in com confirmação explícita, fingerprint e keyring |
-| M1.4 (próximo) | ações na TUI |
-| M1.5 | containers Debian/Ubuntu e release |
+| **M1.4** (concluído) | instalar, trocar e remover pela TUI com prévia do plano e confirmação final |
+| M1.5 (próximo) | containers Debian/Ubuntu, E2E com systemd e release M1 |
 | M2 | extensões por versão e suporte a Fedora/RHEL via Remi |
 | M3 | Alpine/openSUSE, integração transacional com nginx/Apache |
 | M4 | pacotes `.deb`/`.rpm`/`.apk`, i18n, CI completo |
