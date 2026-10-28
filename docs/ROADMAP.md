@@ -96,7 +96,7 @@ Limitações desta fatia:
   (concluído).
 - O helper é aberto por comando. No M1.4 a TUI mantém um helper por ação, sem sessão root
   persistente.
-- O teste de execução real em container com systemd entra no M1.5.
+- O teste de execução real em container com systemd foi implementado no M1.5.
 
 ### M1.3 — rollback, health check e switch seguro (concluído)
 
@@ -153,7 +153,27 @@ Limitações desta fatia:
 
 - A TUI não edita `php.ini`, vhosts ou pools (M2/M3).
 - O plano é refeito pelo CLI ao executar; a confirmação final é a do CLI.
-- O E2E com systemd e a matriz de containers ficam no M1.5.
+- O E2E com systemd e a matriz de containers foram implementados no M1.5.
+
+### M1.5 — validação e release (concluído)
+
+- [x] Teste de contrato: serializa o plano de `--dry-run --json`, decodifica e executa no
+  helper; compara IDs, `argv` canonicalizado e metadados de arquivo com o journal.
+- [x] Teste de falha/rollback: força falha no `systemctl` em container sem systemd PID 1,
+  valida journal balanceado, código de saída do passo e purga dos pacotes pelo rollback.
+- [x] Matriz de containers com systemd: Debian 12/13 e Ubuntu 22.04/24.04.
+- [x] Cenário E2E por distro: container limpo → instalar base → instalar target via
+  Sury/ondrej → trocar a versão ativa → remover a base → validar versão ativa, FPM,
+  socket e pacotes.
+- [x] Job de CI separado para a matriz E2E e para o cenário de rollback.
+- [x] Documentação de desenvolvimento, comandos locais e status do release.
+- [x] Tag `v0.2.0`, merge em `main` e GitHub Release.
+
+Limitações desta fatia:
+
+- O E2E da TUI continua manual; os jobs validam o CLI, o helper e o systemd.
+- A matriz usa containers privilegiados no GitHub Actions; não há teste em VM real.
+- O release notes fica no GitHub Release, sem `CHANGELOG.md` separado.
 
 ### Provider
 
@@ -325,9 +345,19 @@ Regras de segurança implementadas:
 
 - Unitários: geração de plano, parsing de saídas, allowlist, protocolo, journal, executor e
   verificadores.
-- Containers (podman/docker) em CI: Debian 12/13, Ubuntu 22.04/24.04.
-- E2E real (com systemd) em VM ou podman com systemd: instalar → trocar → remover.
-- Teste de contrato: `--dry-run` deve produzir exatamente os `argv` executados.
+- Contrato dry-run × journal: `test/e2e` e `internal/executor/contract_test.go`.
+- Containers (docker) em CI: Debian 12/13, Ubuntu 22.04/24.04.
+- E2E com systemd em containers privilegiados: instalar → trocar → remover.
+- Falha/rollback em container sem systemd PID 1: o `systemctl` falha depois da instalação
+  dos pacotes e o rollback precisa purgá-los.
+- Teste de contrato: `--dry-run --json` deve produzir exatamente os `argv` executados.
+
+Comandos locais:
+
+```bash
+make test-e2e E2E_IMAGE=debian:12 E2E_BASE=8.2 E2E_TARGET=8.3
+make test-rollback E2E_IMAGE=debian:12 E2E_VERSION=8.2
+```
 
 ### Critérios de aceite
 
@@ -337,8 +367,25 @@ Regras de segurança implementadas:
 - Nenhuma senha em log, argv, journal ou arquivo temporário.
 - Falha simulada no meio do plano deixa o journal consistente; a execução para no primeiro
   erro e dispara o rollback automático best-effort.
-- Container limpo → instalar 8.2 → instalar 8.3 via repo externo → trocar → remover 8.2 →
-  estado original, em Debian 12 e Ubuntu 24.04 (E2E no M1.5).
+- Container limpo → instalar base → instalar target via repo externo → trocar → remover
+  base → versão target ativa, em Debian 12/13 e Ubuntu 22.04/24.04.
+- Tag `v0.2.0` publicada após o merge e o GitHub Release.
+
+## Release M1 — v0.2.0
+
+O M1 foi publicado como `v0.2.0`, com os marcos M0, M1.1–M1.5. As notas de release
+ficam no GitHub Release e resumem:
+
+- inventário e diagnóstico de PHP, TUI e `status --json`;
+- planos de `install`, `remove` e `switch` com `--dry-run` e `--json`;
+- executor com helper sudo efêmero, allowlist, journal e rollback;
+- Sury/ondrej opt-in com URL, fingerprint e keyring `signed-by`;
+- ações de escrita na TUI;
+- matriz E2E Debian 12/13 e Ubuntu 22.04/24.04, contrato dry-run × journal e falha/rollback.
+
+O processo de release foi: merge da PR em `develop`, merge de `develop` em `main`, tag
+anotada `v0.2.0` e publicação do GitHub Release. A tag só é criada depois da aprovação do
+PR e da matriz de CI verde.
 
 ## M2 — extensões e Fedora/RHEL
 
