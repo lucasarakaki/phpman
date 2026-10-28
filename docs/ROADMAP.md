@@ -91,10 +91,11 @@ Limitações desta fatia:
   M1.3).
 - `switch` só altera `update-alternatives`; não reinicia FPM nem reescreve vhosts
   (restart de FPM concluído no M1.3; vhosts ficam para o M3).
-- A TUI continua somente leitura (M1.4).
+- A TUI continua somente leitura nesta fatia (ações concluídas no M1.4).
 - Sury/ondrej continua apenas sinalizado; a inclusão opt-in entra no M1.3b
   (concluído).
-- O helper é aberto por comando. Reutilizar uma sessão no TUI será decidido no M1.4.
+- O helper é aberto por comando. No M1.4 a TUI mantém um helper por ação, sem sessão root
+  persistente.
 - O teste de execução real em container com systemd entra no M1.5.
 
 ### M1.3 — rollback, health check e switch seguro (concluído)
@@ -130,6 +131,29 @@ Limitações desta fatia:
 - [x] Journal registra escritas de arquivo com caminho e SHA-256, sem conteúdo bruto.
 - [x] Testes de provider, allowlist, helper, escrita atômica, verificadores e relatório.
 - [x] Documentação do comportamento não transacional do rollback do repositório.
+
+### M1.4 — ações na TUI (concluído)
+
+- [x] Aba *Versões* com `i`, `s` e `d`; `i` aceita versão digitada e pré-preenche a
+  selecionada.
+- [x] Prévia rolável do plano com resumo, avisos, `argv`, rollback e metadados do
+  repositório.
+- [x] Instalação de versão fora do catálogo gera plano Sury/ondrej; a confirmação explícita
+  final continua no CLI e o plano mostra URL, fingerprint e keyring.
+- [x] Execução por `tea.ExecProcess`: a TUI é suspensa e o mesmo binário roda o subcomando
+  `install`/`remove`/`switch`, que refaz o plano e pede confirmação.
+- [x] Um helper por ação; a TUI não abre sessão root persistente, não roda como root e não
+  lê a senha do sudo.
+- [x] Após a execução, o snapshot é recarregado; erros do CLI aparecem em diálogo e o
+  journal permanece disponível.
+- [x] Testes de estado da TUI, diálogos, rolagem, planos de terceiros e `argv` do
+  subcomando.
+
+Limitações desta fatia:
+
+- A TUI não edita `php.ini`, vhosts ou pools (M2/M3).
+- O plano é refeito pelo CLI ao executar; a confirmação final é a do CLI.
+- O E2E com systemd e a matriz de containers ficam no M1.5.
 
 ### Provider
 
@@ -238,8 +262,9 @@ Regras:
 
 ### Helper privilegiado
 
-No M1.2 o CLI abre **um helper por plano**; a reutilização por sessão de TUI será tratada
-no M1.4:
+No M1.2 o CLI abre **um helper por plano**. No M1.4 a TUI mantém a mesma regra: ela
+suspende a interface, executa o subcomando do CLI e deixa o CLI abrir um helper por ação;
+não há sessão root persistente:
 
 ```
 CLI/UI (usuário) --sudo--> <phpman> __helper --socket <path>
@@ -293,7 +318,8 @@ Regras de segurança implementadas:
   `finish`, código de saída, erro, caminho de arquivo e SHA-256 do conteúdo escrito.
 - O executável do helper precisa ser root-owned, não gravável por grupo/outros e estar em
   diretório root-owned; `./bin/phpman` e `go run` são recusados para execução.
-- O helper encerra no `done` ou no EOF do cliente; não há sudo persistente.
+- O helper encerra no `done` ou no EOF do cliente; não há sudo persistente, inclusive nas
+  ações iniciadas pela TUI.
 
 ### Testes
 

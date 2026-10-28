@@ -335,7 +335,7 @@ func (m Model) versionDetail(items []versionItem, index, width int) string {
 		b.WriteString(field("Candidato", a.Candidate, width) + "\n")
 		b.WriteString(field("Origem", a.Origin, width) + "\n")
 		b.WriteString(field("Repositório", a.Source, width) + "\n")
-		b.WriteString("\n" + mutedStyle.Render(wrapWords("A instalação com plano e sudo será habilitada no M1.", width-4)))
+		b.WriteString("\n" + mutedStyle.Render(wrapWords("Pressione i para planejar a instalação; o plano será exibido antes da execução.", width-4)))
 		return b.String()
 	}
 
@@ -403,6 +403,11 @@ func (m Model) versionDetail(items []versionItem, index, width int) string {
 		sort.Strings(names)
 		b.WriteString("\n" + field("Pacotes", fmt.Sprintf("%d", len(names)), width) + "\n")
 		b.WriteString(wrapIndent(strings.Join(names, ", "), 12, width))
+	}
+	if v.Active {
+		b.WriteString("\n" + mutedStyle.Render(wrapWords("Esta é a versão ativa; escolha outra instalada para trocar e não é possível removê-la.", width-4)))
+	} else {
+		b.WriteString("\n" + mutedStyle.Render(wrapWords("Pressione s para trocar ou d para remover esta versão.", width-4)))
 	}
 	return b.String()
 }

@@ -1,4 +1,4 @@
-// Package tui implements the read-only terminal interface of M0.
+// Package tui implements the terminal interface and its write actions.
 package tui
 
 import (
@@ -42,6 +42,15 @@ type Model struct {
 	cursor int
 	help   bool
 
+	dialog       dialogKind
+	dialogTitle  string
+	dialogLines  []string
+	dialogOffset int
+	dialogError  bool
+	inputValue   string
+	pendingPlan  *core.Plan
+	notice       string
+
 	width  int
 	height int
 }
@@ -66,6 +75,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.clampDialogOffset()
 		return m, nil
 
 	case loadedMsg:
@@ -76,6 +86,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snap, m.loadErr = msg.snap, msg.err
 		m.clampCursor()
 		return m, nil
+
+	case execDoneMsg:
+		return m.handleExecDone(msg)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -92,6 +105,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, nil
+	}
+	if m.dialog != dialogNone {
+		return m.handleDialogKey(msg)
 	}
 
 	switch key {
@@ -127,7 +143,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "G", "end":
 		m.cursor = m.cursorMax()
 
+	case "i":
+		if m.tab == tabVersions {
+			return m.openInstallInput()
+		}
+	case "s":
+		if m.tab == tabVersions {
+			return m.planSelected(core.ActionSwitch)
+		}
+	case "d":
+		if m.tab == tabVersions {
+			return m.planSelected(core.ActionRemove)
+		}
+
 	case "r":
+		m.notice = ""
 		m.reload++
 		m.loading = true
 		m.loadErr = nil
@@ -167,6 +197,9 @@ func (m *Model) clampCursor() {
 func (m Model) View() string {
 	if m.width == 0 {
 		return ""
+	}
+	if m.dialog != dialogNone {
+		return m.dialogView()
 	}
 	if m.help {
 		return m.helpView()
@@ -244,6 +277,9 @@ func (m Model) statusLine() string {
 	if m.loading {
 		parts = append(parts, accentStyle.Render("atualizando…"))
 	}
+	if m.notice != "" {
+		parts = append(parts, accentStyle.Render(m.notice))
+	}
 	return strings.Join(parts, mutedStyle.Render("  ·  "))
 }
 
@@ -289,6 +325,9 @@ func (m Model) errorView() string {
 
 func (m Model) footerView() string {
 	keys := []string{"tab/←→ abas", "↑↓ navegar", "r recarregar", "? ajuda", "q sair"}
+	if m.tab == tabVersions && m.snap != nil {
+		keys = []string{"i instalar", "s trocar", "d remover", "↑↓ navegar", "r recarregar", "? ajuda", "q sair"}
+	}
 	return " " + mutedStyle.Render(strings.Join(keys, "  ·  "))
 }
 
@@ -298,6 +337,9 @@ func (m Model) helpView() string {
 		{"1 2 3", "ir direto para a aba"},
 		{"↑ ↓ / k j", "navegar na lista"},
 		{"g / G", "primeiro / último item"},
+		{"i", "instalar versão (aba Versões)"},
+		{"s", "trocar para a versão selecionada"},
+		{"d", "remover a versão selecionada"},
 		{"r", "redetectar o ambiente"},
 		{"?", "fechar esta ajuda"},
 		{"q / ctrl+c", "sair"},
@@ -307,7 +349,7 @@ func (m Model) helpView() string {
 	for _, row := range rows {
 		b.WriteString(accentStyle.Render(fmt.Sprintf("%-14s", row[0])) + mutedStyle.Render(row[1]) + "\n")
 	}
-	b.WriteString("\n" + mutedStyle.Render("phpman é somente leitura nesta versão (M0)."))
+	b.WriteString("\n" + mutedStyle.Render("Ações de escrita exibem o plano e usam o helper privilegiado."))
 	box := cardStyle.Width(max(38, min(60, m.width-8))).Render(b.String())
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
