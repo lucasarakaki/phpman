@@ -25,3 +25,57 @@ jobs:
         run: go test -race ./...
       - name: build
         run: go build ./...
+
+  e2e:
+    name: e2e ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debian-12
+            image: debian:12
+            base: "8.2"
+            target: "8.3"
+          - name: debian-13
+            image: debian:13
+            base: "8.4"
+            target: "8.3"
+          - name: ubuntu-2204
+            image: ubuntu:22.04
+            base: "8.1"
+            target: "8.3"
+          - name: ubuntu-2404
+            image: ubuntu:24.04
+            base: "8.3"
+            target: "8.4"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: build static binary
+        run: CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X main.version=0.2.0-e2e' -o bin/phpman-e2e ./cmd/phpman
+      - name: systemd e2e
+        env:
+          PHPMAN_BIN: ${{ github.workspace }}/bin/phpman-e2e
+        run: bash test/e2e/run.sh "${{ matrix.image }}" "${{ matrix.base }}" "${{ matrix.target }}"
+
+  rollback:
+    name: rollback debian-12
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: build static binary
+        run: CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X main.version=0.2.0-e2e' -o bin/phpman-e2e ./cmd/phpman
+      - name: failure and rollback e2e
+        env:
+          PHPMAN_BIN: ${{ github.workspace }}/bin/phpman-e2e
+        run: bash test/e2e/rollback.sh debian:12 8.2
