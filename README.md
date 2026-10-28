@@ -2,7 +2,7 @@
 
 ![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
 ![Licença MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green)
-![Status M1.4](https://img.shields.io/badge/status-M1.4%20a%C3%A7%C3%B5es%20na%20TUI-blue)
+![Status M1.5](https://img.shields.io/badge/status-M1.5%20valida%C3%A7%C3%A3o%20e%20release-blue)
 
 Inventário e diagnóstico de instalações PHP em distribuições Linux, com uma interface de
 terminal no estilo lazydocker.
@@ -11,16 +11,18 @@ O phpman responde, em um só lugar, perguntas que costumam exigir meia dúzia de
 qual PHP está realmente ativo, qual socket o FPM usa, por que um site quebrou depois de
 uma atualização e por que o `php -v` do terminal não é o mesmo PHP que o nginx executa.
 
-> **Status: M1.4 — ações na TUI.** O phpman detecta o ambiente, aponta problemas, gera
-> planos e aplica `install`, `remove` e `switch` em Debian/Ubuntu por um helper
+> **Status: M1.5 — validação e release.** O phpman detecta o ambiente, aponta problemas,
+> gera planos e aplica `install`, `remove` e `switch` em Debian/Ubuntu por um helper
 > privilegiado efêmero, com allowlist, verificação passo a passo, journal e rollback
 > automático best-effort em caso de falha. A troca reinicia e valida o FPM da versão alvo.
 > Na TUI, a aba *Versões* permite instalar, trocar e remover com prévia rolável do plano;
 > a execução suspende a interface e usa o mesmo CLI, que refaz o plano e pede a
 > confirmação final no terminal. Quando a versão não está no catálogo da distribuição, o
 > plano mostra o repositório Sury/ondrej com URL, fingerprint e keyring `signed-by`
-> explícitos antes da confirmação. A detecção e o `--dry-run` continuam sem root. O
-> release M1 depende do M1.5. O plano completo está em
+> explícitos antes da confirmação. A validação M1.5 cobre Debian 12/13 e Ubuntu
+> 22.04/24.04 em containers com systemd, o contrato entre `--dry-run --json` e o journal,
+> e a falha no meio do plano com rollback automático. O release M1 é a versão `v0.2.0`.
+> A detecção e o `--dry-run` continuam sem root. O plano completo está em
 > [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Sumário
@@ -273,7 +275,7 @@ As regras atuais:
 Exemplo ilustrativo (cores omitidas):
 
 ```
- ⬢ phpman 0.1.0-dev                                    Debian GNU/Linux 12 (bookworm)
+ ⬢ phpman 0.2.0-dev                                    Debian GNU/Linux 12 (bookworm)
  PHP 8.2 ativo  ·  FPM 1/1 ativo  ·  2 versões  ·  1 aviso
   1 Visão geral  2 Versões  3 Doutor
 
@@ -465,10 +467,20 @@ rollback, determinismo e ausência de shell/metacaracteres. O executor, a allowl
 protocolo JSON Lines, o journal e os verificadores têm testes unitários próprios; nenhum
 teste unitário executa comandos reais como root.
 
-O smoke test de leitura roda o binário em `debian:12` e gera um plano real de instalação
-sem root. O smoke de execução em `debian:12` e `ubuntu:24.04` valida sudo, socket,
-allowlist, `apt-get install` e journal até o `systemctl`; como esses containers não têm
-systemd, o E2E completo com systemd e a matriz de containers entram no M1.5.
+O teste de contrato compara o plano de `--dry-run --json` com os eventos `start` do
+journal do helper, canonicalizando o caminho de `argv[0]`. A matriz E2E usa containers
+privilegiados com systemd e valida o fluxo completo em Debian 12/13 e Ubuntu 22.04/24.04:
+container limpo → instalar a versão base → instalar o target via Sury/ondrej → trocar a
+versão ativa → remover a base. Um cenário separado roda em um container sem systemd PID 1
+para forçar falha no `systemctl`, validar o journal e confirmar o rollback dos pacotes.
+
+```bash
+make test-e2e E2E_IMAGE=debian:12 E2E_BASE=8.2 E2E_TARGET=8.3
+make test-rollback E2E_IMAGE=debian:12 E2E_VERSION=8.2
+```
+
+Os testes E2E exigem Docker, `jq` e um host que permita containers privilegiados. O CI
+roda a matriz completa e o cenário de rollback em jobs separados.
 
 ## Roadmap
 
@@ -480,7 +492,7 @@ systemd, o E2E completo com systemd e a matriz de containers entram no M1.5.
 | **M1.3** (concluído) | rollback automático, health check e restart de FPM no switch |
 | **M1.3b** (concluído) | Sury/ondrej opt-in com confirmação explícita, fingerprint e keyring |
 | **M1.4** (concluído) | instalar, trocar e remover pela TUI com prévia do plano e confirmação final |
-| M1.5 (próximo) | containers Debian/Ubuntu, E2E com systemd e release M1 |
+| **M1.5** (em validação) | matriz Debian/Ubuntu, E2E com systemd, contrato dry-run × journal, falha/rollback e release `v0.2.0` |
 | M2 | extensões por versão e suporte a Fedora/RHEL via Remi |
 | M3 | Alpine/openSUSE, integração transacional com nginx/Apache |
 | M4 | pacotes `.deb`/`.rpm`/`.apk`, i18n, CI completo |
