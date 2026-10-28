@@ -48,7 +48,7 @@ build_image() {
         --build-arg "BASE_IMAGE=$image" \
         -f "$E2E_ROOT/test/e2e/Dockerfile" \
         -t "$tag" \
-        "$E2E_ROOT/test/e2e" >/dev/null
+        "$E2E_ROOT/test/e2e" >&2
     printf '%s\n' "$tag"
 }
 
