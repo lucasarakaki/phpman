@@ -13,7 +13,7 @@ import (
 func fixtureSnapshot() *core.Snapshot {
 	return &core.Snapshot{
 		Schema:        core.Schema,
-		Distro:        core.Distro{ID: "debian", PrettyName: "Debian GNU/Linux 12 (bookworm)", Family: core.FamilyDebian, PackageManager: "apt"},
+		Distro:        core.Distro{ID: "debian", PrettyName: "Debian GNU/Linux 12 (bookworm)", Codename: "bookworm", Family: core.FamilyDebian, PackageManager: "apt"},
 		ActiveVersion: "8.2",
 		PathVersion:   "8.2",
 		PathBinary:    "/usr/bin/php8.2",
