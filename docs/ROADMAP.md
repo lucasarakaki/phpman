@@ -155,7 +155,7 @@ Limitações desta fatia:
 - O plano é refeito pelo CLI ao executar; a confirmação final é a do CLI.
 - O E2E com systemd e a matriz de containers foram implementados no M1.5.
 
-### M1.5 — validação e release (em validação)
+### M1.5 — validação e release (concluído)
 
 - [x] Teste de contrato: serializa o plano de `--dry-run --json`, decodifica e executa no
   helper; compara IDs, `argv` canonicalizado e metadados de arquivo com o journal.
@@ -167,7 +167,7 @@ Limitações desta fatia:
   socket e pacotes.
 - [x] Job de CI separado para a matriz E2E e para o cenário de rollback.
 - [x] Documentação de desenvolvimento, comandos locais e status do release.
-- [ ] Tag `v0.2.0`, merge em `main` e GitHub Release (após aprovação do PR).
+- [x] Tag `v0.2.0`, merge em `main` e GitHub Release.
 
 Limitações desta fatia:
 
@@ -373,8 +373,8 @@ make test-rollback E2E_IMAGE=debian:12 E2E_VERSION=8.2
 
 ## Release M1 — v0.2.0
 
-O M1 será publicado como `v0.2.0`, com os marcos M0, M1.1–M1.5. O release notes fica no
-GitHub Release e deve resumir:
+O M1 foi publicado como `v0.2.0`, com os marcos M0, M1.1–M1.5. As notas de release
+ficam no GitHub Release e resumem:
 
 - inventário e diagnóstico de PHP, TUI e `status --json`;
 - planos de `install`, `remove` e `switch` com `--dry-run` e `--json`;
@@ -383,7 +383,7 @@ GitHub Release e deve resumir:
 - ações de escrita na TUI;
 - matriz E2E Debian 12/13 e Ubuntu 22.04/24.04, contrato dry-run × journal e falha/rollback.
 
-O processo de release é: merge da PR em `develop`, merge de `develop` em `main`, tag
+O processo de release foi: merge da PR em `develop`, merge de `develop` em `main`, tag
 anotada `v0.2.0` e publicação do GitHub Release. A tag só é criada depois da aprovação do
 PR e da matriz de CI verde.
 

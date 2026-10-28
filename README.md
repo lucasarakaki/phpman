@@ -2,7 +2,7 @@
 
 ![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
 ![Licença MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green)
-![Status M1.5](https://img.shields.io/badge/status-M1.5%20valida%C3%A7%C3%A3o%20e%20release-blue)
+![Status M1](https://img.shields.io/badge/status-M1%20conclu%C3%ADdo-blue)
 
 Inventário e diagnóstico de instalações PHP em distribuições Linux, com uma interface de
 terminal no estilo lazydocker.
@@ -11,7 +11,7 @@ O phpman responde, em um só lugar, perguntas que costumam exigir meia dúzia de
 qual PHP está realmente ativo, qual socket o FPM usa, por que um site quebrou depois de
 uma atualização e por que o `php -v` do terminal não é o mesmo PHP que o nginx executa.
 
-> **Status: M1.5 — validação e release.** O phpman detecta o ambiente, aponta problemas,
+> **Status: M1 concluído — v0.2.0.** O phpman detecta o ambiente, aponta problemas,
 > gera planos e aplica `install`, `remove` e `switch` em Debian/Ubuntu por um helper
 > privilegiado efêmero, com allowlist, verificação passo a passo, journal e rollback
 > automático best-effort em caso de falha. A troca reinicia e valida o FPM da versão alvo.
@@ -21,7 +21,7 @@ uma atualização e por que o `php -v` do terminal não é o mesmo PHP que o ngi
 > plano mostra o repositório Sury/ondrej com URL, fingerprint e keyring `signed-by`
 > explícitos antes da confirmação. A validação M1.5 cobre Debian 12/13 e Ubuntu
 > 22.04/24.04 em containers com systemd, o contrato entre `--dry-run --json` e o journal,
-> e a falha no meio do plano com rollback automático. O release M1 é a versão `v0.2.0`.
+> e a falha no meio do plano com rollback automático. O M1 foi publicado como `v0.2.0`.
 > A detecção e o `--dry-run` continuam sem root. O plano completo está em
 > [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -492,7 +492,7 @@ roda a matriz completa e o cenário de rollback em jobs separados.
 | **M1.3** (concluído) | rollback automático, health check e restart de FPM no switch |
 | **M1.3b** (concluído) | Sury/ondrej opt-in com confirmação explícita, fingerprint e keyring |
 | **M1.4** (concluído) | instalar, trocar e remover pela TUI com prévia do plano e confirmação final |
-| **M1.5** (em validação) | matriz Debian/Ubuntu, E2E com systemd, contrato dry-run × journal, falha/rollback e release `v0.2.0` |
+| **M1.5** (concluído) | matriz Debian/Ubuntu, E2E com systemd, contrato dry-run × journal, falha/rollback e release `v0.2.0` |
 | M2 | extensões por versão e suporte a Fedora/RHEL via Remi |
 | M3 | Alpine/openSUSE, integração transacional com nginx/Apache |
 | M4 | pacotes `.deb`/`.rpm`/`.apk`, i18n, CI completo |
